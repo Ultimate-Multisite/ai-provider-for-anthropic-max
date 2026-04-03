@@ -1,0 +1,18 @@
+{
+    "name": "ai-provider-for-anthropic-max",
+    "version": "1.0.0",
+    "private": true,
+    "license": "GPL-2.0-or-later",
+    "scripts": {
+        "build": "wp-scripts build",
+        "start": "wp-scripts start",
+        "wp-env": "wp-env",
+        "wp-env:start": "wp-env start",
+        "wp-env:stop": "wp-env stop",
+        "wp-env:clean": "wp-env clean all"
+    },
+    "devDependencies": {
+        "@wordpress/env": "^10.39.0",
+        "@wordpress/scripts": "^31.2.0"
+    }
+}
