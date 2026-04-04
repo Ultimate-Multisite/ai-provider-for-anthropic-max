@@ -36,6 +36,16 @@ class AnthropicOAuthRequestAuthentication implements RequestAuthenticationInterf
     private PoolManager $pool;
 
     /**
+     * The email of the account whose token was last used.
+     *
+     * Populated by authenticateRequest() so callers can identify which
+     * account to mark as rate-limited on a 429/529 response.
+     *
+     * @var string|null
+     */
+    private ?string $activeEmail = null;
+
+    /**
      * Constructor.
      *
      * @param PoolManager $pool The pool manager to retrieve tokens from.
@@ -49,7 +59,8 @@ class AnthropicOAuthRequestAuthentication implements RequestAuthenticationInterf
      * Authenticates the request with an OAuth Bearer token.
      *
      * Retrieves the best available token from the pool, auto-refreshing
-     * expired tokens as needed.
+     * expired tokens as needed. Caches the active account email so that
+     * callers can mark it as rate-limited on a 429/529 response.
      *
      * @since 1.0.0
      *
@@ -60,19 +71,36 @@ class AnthropicOAuthRequestAuthentication implements RequestAuthenticationInterf
      */
     public function authenticateRequest(Request $request): Request
     {
-        $token = $this->pool->getActiveToken();
+        $this->activeEmail = null;
+        $result = $this->pool->getActiveTokenWithEmail();
 
-        if (empty($token)) {
+        if ($result === null || empty($result['token'])) {
             throw new \RuntimeException(
                 'No active OAuth token available in the Anthropic Max account pool. ' .
                 'Add an account via Settings > Connectors.'
             );
         }
 
+        $this->activeEmail = $result['email'];
+
         $request = $request->withHeader('anthropic-version', self::ANTHROPIC_API_VERSION);
         $request = $request->withHeader('anthropic-beta', self::ANTHROPIC_OAUTH_BETA);
 
-        return $request->withHeader('Authorization', 'Bearer ' . $token);
+        return $request->withHeader('Authorization', 'Bearer ' . $result['token']);
+    }
+
+    /**
+     * Returns the email of the account whose token was last used.
+     *
+     * Returns null if authenticateRequest() has not been called yet.
+     *
+     * @since 1.0.0
+     *
+     * @return string|null
+     */
+    public function getActiveEmail(): ?string
+    {
+        return $this->activeEmail;
     }
 
     /**

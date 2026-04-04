@@ -45,7 +45,7 @@ class TokenRefresher
             [
                 'headers' => [
                     'Content-Type' => 'application/json',
-                    'User-Agent'   => 'ai-provider-for-anthropic-max/1.0.0',
+                    'User-Agent'   => PoolManager::USER_AGENT,
                 ],
                 'body'    => $body,
                 'timeout' => 15,

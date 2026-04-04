@@ -34,6 +34,19 @@ class PoolManager
 
     /**
      * Anthropic OAuth constants (same as Claude CLI).
+     *
+     * Alignment notes (vs Claude CLI codebase):
+     *   CLIENT_ID       — identical to Claude CLI (public, same for all clients).
+     *   TOKEN_ENDPOINT  — identical to Claude CLI prod config.
+     *   AUTHORIZE_URL   — we hit claude.ai directly; Claude CLI now routes through
+     *                     https://claude.com/cai/oauth/authorize for attribution,
+     *                     which 307-redirects to claude.ai. Ours is the final dest.
+     *                     FALLBACK: if authorize breaks, try https://claude.com/cai/oauth/authorize.
+     *   REDIRECT_URI    — console.anthropic.com is the legacy Console domain.
+     *                     platform.claude.com is the current primary domain. Both
+     *                     redirect URIs are currently registered by Anthropic.
+     *                     FALLBACK: 'https://platform.claude.com/oauth/code/callback'
+     *   SCOPES          — identical to Claude CLI's ALL_OAUTH_SCOPES union.
      */
     public const CLIENT_ID      = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
     public const TOKEN_ENDPOINT  = 'https://platform.claude.com/v1/oauth/token';
@@ -42,9 +55,24 @@ class PoolManager
     public const SCOPES          = 'org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload';
 
     /**
+     * User-Agent sent on token exchange and refresh requests.
+     *
+     * Aligned with Claude CLI format: "claude-cli/{version} (external, cli)".
+     * The "(wordpress-plugin)" suffix identifies this client to Anthropic.
+     * FALLBACK: if UA filtering causes issues, try 'claude-cli/2.1.80'.
+     */
+    public const USER_AGENT = 'claude-cli/2.1.80 (wordpress-plugin)';
+
+    /**
      * Default cooldown duration for rate-limited accounts (5 minutes).
      */
     public const DEFAULT_COOLDOWN_MS = 300000;
+
+    /**
+     * Required scope that must be present in the granted scope list.
+     * A token missing this scope will fail at inference time.
+     */
+    public const REQUIRED_SCOPE = 'user:inference';
 
     /**
      * Singleton instance.
@@ -116,8 +144,96 @@ class PoolManager
                 'expiresIn'     => max(0, intdiv($expires_in_ms, 1000)),
                 'hasRefresh'    => !empty($account['refresh']),
                 'cooldownUntil' => $account['cooldownUntil'] ?? null,
+                'accountId'     => $account['accountId'] ?? null,
             ];
         }, $accounts);
+    }
+
+    /**
+     * Returns the best available access token and its account email.
+     *
+     * Same selection logic as getActiveToken(). Returns an associative array
+     * with 'token' and 'email' keys, or null if no account is available.
+     * Used by AnthropicOAuthRequestAuthentication to track which account
+     * is in use so it can be marked rate-limited on 429/529 responses.
+     *
+     * @return array{token: string, email: string}|null
+     */
+    public function getActiveTokenWithEmail(): ?array
+    {
+        $pool   = $this->loadPool();
+        $now_ms = $this->nowMs();
+
+        // Clear expired cooldowns.
+        $changed = false;
+        foreach ($pool['accounts'] as &$account) {
+            if (
+                ($account['status'] ?? '') === 'rate-limited' &&
+                isset($account['cooldownUntil']) &&
+                $account['cooldownUntil'] > 0 &&
+                $account['cooldownUntil'] <= $now_ms
+            ) {
+                $account['status']        = 'idle';
+                $account['cooldownUntil'] = null;
+                $changed                  = true;
+            }
+        }
+        unset($account);
+
+        if ($changed) {
+            $this->savePool($pool);
+        }
+
+        $best       = null;
+        $best_index = -1;
+
+        foreach ($pool['accounts'] as $index => $account) {
+            $status = $account['status'] ?? 'idle';
+            if ($status === 'rate-limited') {
+                continue;
+            }
+            if (empty($account['access'])) {
+                continue;
+            }
+            if ($best === null || ($account['lastUsed'] ?? '') < ($best['lastUsed'] ?? '')) {
+                $best       = $account;
+                $best_index = $index;
+            }
+        }
+
+        if ($best === null) {
+            return null;
+        }
+
+        $expires = $best['expires'] ?? 0;
+        if ($expires > 0 && $expires <= $now_ms && !empty($best['refresh'])) {
+            $refresher = new TokenRefresher();
+            $refreshed = $refresher->refresh($best['refresh']);
+
+            if ($refreshed !== null) {
+                $pool['accounts'][$best_index]['access']   = $refreshed['access_token'];
+                $pool['accounts'][$best_index]['expires']  = $now_ms + ($refreshed['expires_in'] * 1000);
+                $pool['accounts'][$best_index]['status']   = 'active';
+                $pool['accounts'][$best_index]['lastUsed'] = gmdate('Y-m-d\TH:i:s\Z');
+
+                if (!empty($refreshed['refresh_token'])) {
+                    $pool['accounts'][$best_index]['refresh'] = $refreshed['refresh_token'];
+                }
+
+                $this->savePool($pool);
+                return ['token' => $refreshed['access_token'], 'email' => $best['email'] ?? ''];
+            }
+
+            $pool['accounts'][$best_index]['status'] = 'refresh-failed';
+            $this->savePool($pool);
+            return null;
+        }
+
+        $pool['accounts'][$best_index]['status']   = 'active';
+        $pool['accounts'][$best_index]['lastUsed'] = gmdate('Y-m-d\TH:i:s\Z');
+        $this->savePool($pool);
+
+        return ['token' => $best['access'], 'email' => $best['email'] ?? ''];
     }
 
     /**
@@ -220,17 +336,19 @@ class PoolManager
     /**
      * Adds or updates an account in the pool.
      *
-     * @param string $email         The account email.
-     * @param string $access_token  The OAuth access token.
-     * @param string $refresh_token The OAuth refresh token.
-     * @param int    $expires_in    Token lifetime in seconds.
+     * @param string      $email         The account email.
+     * @param string      $access_token  The OAuth access token.
+     * @param string      $refresh_token The OAuth refresh token.
+     * @param int         $expires_in    Token lifetime in seconds.
+     * @param string|null $account_id    Optional account UUID from the token response.
      * @return int The total number of accounts in the pool.
      */
     public function addAccount(
         string $email,
         string $access_token,
         string $refresh_token,
-        int $expires_in
+        int $expires_in,
+        ?string $account_id = null
     ): int {
         $pool   = $this->loadPool();
         $now_ms = $this->nowMs();
@@ -248,14 +366,17 @@ class PoolManager
                 $account['lastUsed']      = $now;
                 $account['status']        = 'active';
                 $account['cooldownUntil'] = null;
-                $found                    = true;
+                if ($account_id !== null) {
+                    $account['accountId'] = $account_id;
+                }
+                $found = true;
                 break;
             }
         }
         unset($account);
 
         if (!$found) {
-            $pool['accounts'][] = [
+            $entry = [
                 'email'         => $email,
                 'access'        => $access_token,
                 'refresh'       => $refresh_token,
@@ -265,6 +386,10 @@ class PoolManager
                 'status'        => 'active',
                 'cooldownUntil' => null,
             ];
+            if ($account_id !== null) {
+                $entry['accountId'] = $account_id;
+            }
+            $pool['accounts'][] = $entry;
         }
 
         $this->savePool($pool);
@@ -301,16 +426,24 @@ class PoolManager
     /**
      * Marks an account as rate-limited with a cooldown period.
      *
-     * @param string   $email       The account email.
-     * @param int|null $cooldown_ms Cooldown in milliseconds (null for default).
+     * Respects a Retry-After value when provided (e.g. from a 429 response
+     * header). Falls back to DEFAULT_COOLDOWN_MS when not specified.
+     *
+     * @param string   $email            The account email.
+     * @param int|null $cooldown_ms      Cooldown in milliseconds (null for default).
+     * @param int|null $retry_after_secs Retry-After header value in seconds (overrides cooldown_ms).
      * @return bool Whether the account was found.
      */
-    public function markRateLimited(string $email, ?int $cooldown_ms = null): bool
+    public function markRateLimited(string $email, ?int $cooldown_ms = null, ?int $retry_after_secs = null): bool
     {
         $pool   = $this->loadPool();
         $now_ms = $this->nowMs();
 
-        if ($cooldown_ms === null) {
+        if ($retry_after_secs !== null) {
+            // Retry-After takes precedence — use the server-specified window.
+            // A value of 0 is authoritative (server says retry immediately).
+            $cooldown_ms = $retry_after_secs * 1000;
+        } elseif ($cooldown_ms === null) {
             $cooldown_ms = self::DEFAULT_COOLDOWN_MS;
         }
 
@@ -325,6 +458,22 @@ class PoolManager
         unset($account);
 
         return false;
+    }
+
+    /**
+     * Marks the currently active account as rate-limited based on an HTTP response.
+     *
+     * Parses the Retry-After header (seconds or HTTP-date) from the response
+     * and uses it as the cooldown duration. Falls back to DEFAULT_COOLDOWN_MS.
+     *
+     * @param string $email    The account email to mark.
+     * @param array  $response The wp_remote_* response array.
+     * @return bool Whether the account was found and marked.
+     */
+    public function markRateLimitedFromResponse(string $email, array $response): bool
+    {
+        $retry_after_secs = $this->parseRetryAfter($response);
+        return $this->markRateLimited($email, null, $retry_after_secs);
     }
 
     /**
@@ -395,6 +544,7 @@ class PoolManager
                 'status'       => $status,
                 'tokenExpired' => ($account['expires'] ?? 0) <= $now_ms,
                 'hasRefresh'   => !empty($account['refresh']),
+                'accountId'    => $account['accountId'] ?? null,
                 'validity'     => 'unknown',
             ];
 
@@ -423,6 +573,7 @@ class PoolManager
                     'Authorization'    => 'Bearer ' . $token,
                     'anthropic-version' => '2023-06-01',
                     'anthropic-beta'   => 'oauth-2025-04-20',
+                    'User-Agent'       => self::USER_AGENT,
                 ],
                 'timeout' => 10,
             ]
@@ -448,10 +599,24 @@ class PoolManager
     /**
      * Generates a PKCE verifier and challenge, stores the verifier in a transient.
      *
+     * Optional parameters align with Claude CLI's authorize URL support:
+     *   - login_hint:   pre-populate the email field on the login page (standard OIDC).
+     *   - login_method: request a specific login method ('sso', 'magic_link', 'google').
+     *
+     * Note: org_uuid is accepted for API compatibility but is not appended to the
+     * authorize URL — the claude.ai authorize endpoint does not support orgUUID as
+     * a query parameter.
+     *
+     * @param string|null $login_hint   Optional email to pre-populate on the login page.
+     * @param string|null $login_method Optional login method ('sso', 'magic_link', 'google').
+     * @param string|null $org_uuid     Accepted for compatibility; not used in the authorize URL.
      * @return array{verifier: string, challenge: string, state: string, authorize_url: string}
      */
-    public function startOAuthFlow(): array
-    {
+    public function startOAuthFlow(
+        ?string $login_hint = null,
+        ?string $login_method = null,
+        ?string $org_uuid = null
+    ): array {
         // Generate PKCE code_verifier (43 chars, base64url no padding).
         $verifier  = $this->generateVerifier();
         $challenge = $this->generateChallenge($verifier);
@@ -460,16 +625,28 @@ class PoolManager
         // Store verifier + state in a transient (10 minute TTL).
         set_transient(self::PKCE_TRANSIENT_PREFIX . $state, $verifier, 600);
 
-        $authorize_url = self::AUTHORIZE_URL . '?' . http_build_query([
+        $params = [
             'client_id'             => self::CLIENT_ID,
-            'response_type'        => 'code',
-            'redirect_uri'         => self::REDIRECT_URI,
-            'scope'                => self::SCOPES,
-            'code_challenge'       => $challenge,
+            'response_type'         => 'code',
+            'redirect_uri'          => self::REDIRECT_URI,
+            'scope'                 => self::SCOPES,
+            'code_challenge'        => $challenge,
             'code_challenge_method' => 'S256',
-            'state'                => $state,
-            'code'                 => 'true',
-        ]);
+            'state'                 => $state,
+            // Alignment: &code=true matches Claude CLI — tells the login page to
+            // show the Claude Max upsell. Required for parity with the official client.
+            'code'                  => 'true',
+        ];
+
+        // Optional params supported by Claude CLI (not sent unless provided).
+        if ($login_hint !== null && $login_hint !== '') {
+            $params['login_hint'] = $login_hint;
+        }
+        if ($login_method !== null && $login_method !== '') {
+            $params['login_method'] = $login_method;
+        }
+
+        $authorize_url = self::AUTHORIZE_URL . '?' . http_build_query($params);
 
         return [
             'verifier'      => $verifier,
@@ -482,10 +659,19 @@ class PoolManager
     /**
      * Exchanges an authorization code for tokens.
      *
+     * After a successful exchange, validates that the granted scope includes
+     * 'user:inference'. A token missing this scope will fail at inference time;
+     * catching it here gives a clearer error at add-account time.
+     *
+     * The token response may also contain an 'account' object with a UUID
+     * (account.uuid) which is stored as accountId for diagnostics.
+     *
      * @param string $code  The authorization code.
      * @param string $state The state nonce.
      * @param string $email The account email.
      * @return array{access_token: string, refresh_token: string, expires_in: int}|null
+     *         Returns null on failure. Returns WP_Error-compatible array on scope failure
+     *         via the 'scope_error' key set to true.
      */
     public function exchangeCode(string $code, string $state, string $email): ?array
     {
@@ -511,7 +697,7 @@ class PoolManager
             [
                 'headers' => [
                     'Content-Type' => 'application/json',
-                    'User-Agent'   => 'ai-provider-for-anthropic-max/1.0.0',
+                    'User-Agent'   => self::USER_AGENT,
                 ],
                 'body'    => $body,
                 'timeout' => 15,
@@ -532,14 +718,40 @@ class PoolManager
             return null;
         }
 
+        // Validate that the granted scope includes user:inference.
+        // The 'scope' field is a space-delimited string of granted scopes.
+        // Diagnostic: d.get('scope', '').split() should include 'user:inference'.
+        if (!empty($data['scope'])) {
+            $granted_scopes = explode(' ', (string) $data['scope']);
+            if (!in_array(self::REQUIRED_SCOPE, $granted_scopes, true)) {
+                return [
+                    'scope_error'    => true,
+                    'granted_scopes' => $granted_scopes,
+                ];
+            }
+        }
+
+        // Extract accountId from the 'account' object if present.
+        // Alignment: Claude CLI's token response contains 'account' => ['uuid' => ..., 'email_address' => ...].
+        $account_id = null;
+        if (!empty($data['account']) && is_array($data['account'])) {
+            $account_id = $data['account']['uuid'] ?? null;
+        }
+
         $result = [
             'access_token'  => $data['access_token'],
             'refresh_token' => $data['refresh_token'] ?? '',
             'expires_in'    => (int) ($data['expires_in'] ?? 3600),
         ];
 
-        // Store in pool.
-        $this->addAccount($email, $result['access_token'], $result['refresh_token'], $result['expires_in']);
+        // Store in pool, including accountId if available.
+        $this->addAccount(
+            $email,
+            $result['access_token'],
+            $result['refresh_token'],
+            $result['expires_in'],
+            $account_id
+        );
 
         return $result;
     }
@@ -585,5 +797,35 @@ class PoolManager
     {
         $hash = hash('sha256', $verifier, true);
         return rtrim(strtr(base64_encode($hash), '+/', '-_'), '=');
+    }
+
+    /**
+     * Parses the Retry-After header from a wp_remote_* response.
+     *
+     * Supports both integer (seconds) and HTTP-date formats per RFC 7231.
+     * Returns null if the header is absent or unparseable.
+     *
+     * @param array $response The wp_remote_* response array.
+     * @return int|null Retry-After in seconds, or null if not present.
+     */
+    protected function parseRetryAfter(array $response): ?int
+    {
+        $header = wp_remote_retrieve_header($response, 'retry-after');
+        if (empty($header)) {
+            return null;
+        }
+
+        // Integer seconds format: "Retry-After: 60"
+        if (ctype_digit((string) $header)) {
+            return (int) $header;
+        }
+
+        // HTTP-date format: "Retry-After: Wed, 21 Oct 2025 07:28:00 GMT"
+        $timestamp = strtotime((string) $header);
+        if ($timestamp !== false && $timestamp > time()) {
+            return $timestamp - time();
+        }
+
+        return null;
     }
 }

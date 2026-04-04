@@ -36,6 +36,7 @@ use WordPress\AiClient\Tools\DTO\FunctionCall;
 use WordPress\AiClient\Tools\DTO\FunctionDeclaration;
 use WordPress\AiClient\Tools\DTO\WebSearch;
 use AnthropicMaxAiProvider\Authentication\AnthropicOAuthRequestAuthentication;
+use AnthropicMaxAiProvider\OAuthPool\PoolManager;
 use AnthropicMaxAiProvider\Provider\AnthropicMaxProvider;
 
 /**
@@ -76,12 +77,16 @@ class AnthropicMaxTextGenerationModel extends AbstractApiBasedModel implements T
         }
 
         // Fallback: build OAuth auth from the pool manager.
-        $pool = \AnthropicMaxAiProvider\OAuthPool\PoolManager::getInstance();
+        $pool = PoolManager::getInstance();
         return new AnthropicOAuthRequestAuthentication($pool);
     }
 
     /**
      * Generates a text result using the Anthropic Messages API.
+     *
+     * On 429 (rate limit) or 529 (API overloaded) responses, the active account
+     * is marked as rate-limited in the pool using the Retry-After header value
+     * when present, falling back to the pool's DEFAULT_COOLDOWN_MS.
      *
      * @since 1.0.0
      *
@@ -108,12 +113,85 @@ class AnthropicMaxTextGenerationModel extends AbstractApiBasedModel implements T
             $this->getRequestOptions()
         );
 
-        $request  = $this->getRequestAuthentication()->authenticateRequest($request);
+        $auth     = $this->getRequestAuthentication();
+        $request  = $auth->authenticateRequest($request);
         $response = $httpTransporter->send($request);
+
+        // On rate-limit or overload responses, mark the active account with the
+        // server-specified cooldown before letting the SDK throw its exception.
+        // 429 = rate limited; 529 = Anthropic API overloaded.
+        $status_code = $response->getStatusCode();
+        if ($status_code === 429 || $status_code === 529) {
+            $this->handleRateLimitResponse($auth, $response);
+        }
 
         ResponseUtil::throwIfNotSuccessful($response);
 
         return $this->parseResponseToGenerativeAiResult($response);
+    }
+
+    /**
+     * Marks the active pool account as rate-limited based on the API response.
+     *
+     * Extracts the Retry-After header (seconds or HTTP-date) and passes it to
+     * the pool manager. Falls back to DEFAULT_COOLDOWN_MS when absent.
+     *
+     * @since 1.0.0
+     *
+     * @param RequestAuthenticationInterface $auth     The request authentication instance.
+     * @param Response                       $response The rate-limit response.
+     * @return void
+     */
+    protected function handleRateLimitResponse(
+        RequestAuthenticationInterface $auth,
+        Response $response
+    ): void {
+        // Only act when using our OAuth auth — we need the pool manager.
+        if (!($auth instanceof AnthropicOAuthRequestAuthentication)) {
+            return;
+        }
+
+        $pool  = PoolManager::getInstance();
+        $email = $auth->getActiveEmail();
+
+        if ($email === null) {
+            return;
+        }
+
+        // Parse Retry-After header: integer seconds or HTTP-date.
+        $retry_after_secs = $this->parseRetryAfterHeader($response);
+        $pool->markRateLimited($email, null, $retry_after_secs);
+    }
+
+    /**
+     * Parses the Retry-After header from an SDK Response.
+     *
+     * Supports integer (seconds) and HTTP-date formats per RFC 7231.
+     *
+     * @since 1.0.0
+     *
+     * @param Response $response The HTTP response.
+     * @return int|null Retry-After in seconds, or null if absent/unparseable.
+     */
+    protected function parseRetryAfterHeader(Response $response): ?int
+    {
+        $header = $response->getHeaderAsString('retry-after');
+        if ($header === null || $header === '') {
+            return null;
+        }
+
+        // Integer seconds: "Retry-After: 60"
+        if (ctype_digit($header)) {
+            return (int) $header;
+        }
+
+        // HTTP-date: "Retry-After: Wed, 21 Oct 2025 07:28:00 GMT"
+        $timestamp = strtotime($header);
+        if ($timestamp !== false && $timestamp > time()) {
+            return $timestamp - time();
+        }
+
+        return null;
     }
 
     /**
