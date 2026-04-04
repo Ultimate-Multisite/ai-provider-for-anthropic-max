@@ -439,8 +439,9 @@ class PoolManager
         $pool   = $this->loadPool();
         $now_ms = $this->nowMs();
 
-        if ($retry_after_secs !== null && $retry_after_secs > 0) {
+        if ($retry_after_secs !== null) {
             // Retry-After takes precedence — use the server-specified window.
+            // A value of 0 is authoritative (server says retry immediately).
             $cooldown_ms = $retry_after_secs * 1000;
         } elseif ($cooldown_ms === null) {
             $cooldown_ms = self::DEFAULT_COOLDOWN_MS;
@@ -601,11 +602,14 @@ class PoolManager
      * Optional parameters align with Claude CLI's authorize URL support:
      *   - login_hint:   pre-populate the email field on the login page (standard OIDC).
      *   - login_method: request a specific login method ('sso', 'magic_link', 'google').
-     *   - org_uuid:     pre-select an org for team/enterprise logins.
+     *
+     * Note: org_uuid is accepted for API compatibility but is not appended to the
+     * authorize URL — the claude.ai authorize endpoint does not support orgUUID as
+     * a query parameter.
      *
      * @param string|null $login_hint   Optional email to pre-populate on the login page.
      * @param string|null $login_method Optional login method ('sso', 'magic_link', 'google').
-     * @param string|null $org_uuid     Optional org UUID for team/enterprise logins.
+     * @param string|null $org_uuid     Accepted for compatibility; not used in the authorize URL.
      * @return array{verifier: string, challenge: string, state: string, authorize_url: string}
      */
     public function startOAuthFlow(
@@ -640,9 +644,6 @@ class PoolManager
         }
         if ($login_method !== null && $login_method !== '') {
             $params['login_method'] = $login_method;
-        }
-        if ($org_uuid !== null && $org_uuid !== '') {
-            $params['orgUUID'] = $org_uuid;
         }
 
         $authorize_url = self::AUTHORIZE_URL . '?' . http_build_query($params);

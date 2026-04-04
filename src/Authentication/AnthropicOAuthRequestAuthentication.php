@@ -71,6 +71,7 @@ class AnthropicOAuthRequestAuthentication implements RequestAuthenticationInterf
      */
     public function authenticateRequest(Request $request): Request
     {
+        $this->activeEmail = null;
         $result = $this->pool->getActiveTokenWithEmail();
 
         if ($result === null || empty($result['token'])) {
