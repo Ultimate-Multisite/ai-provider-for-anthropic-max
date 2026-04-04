@@ -43,6 +43,27 @@ function register_routes(): void {
 			'methods'             => 'GET',
 			'callback'            => __NAMESPACE__ . '\\rest_start_oauth',
 			'permission_callback' => __NAMESPACE__ . '\\can_manage',
+			'args'                => [
+				'login_hint'   => [
+					'required'          => false,
+					'type'              => 'string',
+					'sanitize_callback' => 'sanitize_email',
+					'description'       => 'Pre-populate the email field on the Anthropic login page.',
+				],
+				'login_method' => [
+					'required'          => false,
+					'type'              => 'string',
+					'sanitize_callback' => 'sanitize_text_field',
+					'enum'              => [ 'sso', 'magic_link', 'google' ],
+					'description'       => 'Request a specific login method.',
+				],
+				'org_uuid'     => [
+					'required'          => false,
+					'type'              => 'string',
+					'sanitize_callback' => 'sanitize_text_field',
+					'description'       => 'Pre-select an org UUID for team/enterprise logins.',
+				],
+			],
 		]
 	);
 
@@ -145,11 +166,21 @@ function rest_list_accounts(): \WP_REST_Response {
 /**
  * Starts the OAuth PKCE flow and returns the authorize URL.
  *
+ * Accepts optional query params:
+ *   - login_hint:   pre-populate the email on the Anthropic login page.
+ *   - login_method: request a specific login method ('sso', 'magic_link', 'google').
+ *   - org_uuid:     pre-select an org for team/enterprise logins.
+ *
+ * @param \WP_REST_Request $request The request object.
  * @return \WP_REST_Response
  */
-function rest_start_oauth(): \WP_REST_Response {
+function rest_start_oauth( \WP_REST_Request $request ): \WP_REST_Response {
 	$pool = PoolManager::getInstance();
-	$data = $pool->startOAuthFlow();
+	$data = $pool->startOAuthFlow(
+		$request->get_param( 'login_hint' ) ?: null,
+		$request->get_param( 'login_method' ) ?: null,
+		$request->get_param( 'org_uuid' ) ?: null
+	);
 
 	// Only return the authorize URL and state (never the verifier).
 	return rest_ensure_response( [
@@ -185,6 +216,22 @@ function rest_exchange_code( \WP_REST_Request $request ) {
 			'exchange_failed',
 			__( 'Failed to exchange authorization code. The code may be expired or the state is invalid.', 'ai-provider-for-anthropic-max' ),
 			[ 'status' => 400 ]
+		);
+	}
+
+	// Scope validation failure: the token was issued but is missing user:inference.
+	// The account was NOT added to the pool. Return a clear error so the UI can
+	// prompt the user to re-authorize with the correct scopes.
+	if ( ! empty( $result['scope_error'] ) ) {
+		$granted = implode( ' ', (array) ( $result['granted_scopes'] ?? [] ) );
+		return new \WP_Error(
+			'insufficient_scope',
+			sprintf(
+				/* translators: %s: space-separated list of granted scopes */
+				__( 'Authorization succeeded but the token is missing the required "user:inference" scope. Granted scopes: %s. Please re-authorize and ensure you are using a Claude Max subscription account.', 'ai-provider-for-anthropic-max' ),
+				$granted ?: __( '(none)', 'ai-provider-for-anthropic-max' )
+			),
+			[ 'status' => 403 ]
 		);
 	}
 
