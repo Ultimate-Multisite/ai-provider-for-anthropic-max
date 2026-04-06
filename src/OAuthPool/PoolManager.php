@@ -683,6 +683,12 @@ class PoolManager
             return null;
         }
 
+        // Claude's OAuth returns the code in the form "code#state".
+        // Strip the fragment before sending to the token endpoint.
+        if (strpos($code, '#') !== false) {
+            $code = substr($code, 0, strpos($code, '#'));
+        }
+
         $body = wp_json_encode([
             'code'          => $code,
             'grant_type'    => 'authorization_code',

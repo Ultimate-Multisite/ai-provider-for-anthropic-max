@@ -211,10 +211,28 @@ class AnthropicMaxTextGenerationModel extends AbstractApiBasedModel implements T
             'messages' => $this->prepareMessagesParam($prompt),
         ];
 
+        // Anthropic Max OAuth gateway requires the first system block to be the
+        // Claude Code identifier — otherwise it returns a misleading
+        // 401 "Invalid bearer token". Always prepend it, then append any
+        // user-supplied system instruction as a second block.
+        $systemBlocks = [
+            [
+                'type' => 'text',
+                'text' => "You are Claude Code, Anthropic's official CLI for Claude.",
+            ],
+        ];
+
         $systemInstruction = $config->getSystemInstruction();
         if ($systemInstruction) {
-            $params['system'] = $systemInstruction;
+            $systemBlocks[] = [
+                'type' => 'text',
+                'text' => is_string($systemInstruction)
+                    ? $systemInstruction
+                    : (string) $systemInstruction,
+            ];
         }
+
+        $params['system'] = $systemBlocks;
 
         $maxTokens = $config->getMaxTokens();
         $params['max_tokens'] = $maxTokens ?? 4096;
@@ -252,6 +270,9 @@ class AnthropicMaxTextGenerationModel extends AbstractApiBasedModel implements T
         $webSearch            = $config->getWebSearch();
         if (is_array($functionDeclarations) || $webSearch) {
             $params['tools'] = $this->prepareToolsParam($functionDeclarations, $webSearch);
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('[anthropic-max] tools payload: ' . wp_json_encode($params['tools']));
+            }
         }
 
         $customOptions = $config->getCustomOptions();
@@ -461,6 +482,11 @@ class AnthropicMaxTextGenerationModel extends AbstractApiBasedModel implements T
                         'type'       => 'object',
                         'properties' => new \stdClass(),
                     ];
+                } else {
+                    // Anthropic requires input_schema.properties to be an object,
+                    // never an array. An empty PHP array JSON-encodes to [], so
+                    // coerce empty/list-style properties to stdClass.
+                    $inputSchema = $this->normalizeSchemaProperties($inputSchema);
                 }
 
                 $tools[] = array_filter([
@@ -482,6 +508,46 @@ class AnthropicMaxTextGenerationModel extends AbstractApiBasedModel implements T
         }
 
         return $tools;
+    }
+
+    /**
+     * Recursively ensures that any "properties" key inside a JSON schema is
+     * encoded as a JSON object (stdClass) rather than an empty JSON array.
+     *
+     * Anthropic rejects tools whose input_schema.properties serializes to [].
+     *
+     * @param mixed $schema The schema node.
+     * @return mixed The normalized schema.
+     */
+    protected function normalizeSchemaProperties($schema)
+    {
+        if (is_array($schema)) {
+            // Draft 2020-12: `items` must be a schema or boolean, never an array.
+            // An empty array (legacy tuple form) is invalid; coerce to {} (any).
+            if (array_key_exists('items', $schema) && is_array($schema['items']) && array_is_list($schema['items'])) {
+                $schema['items'] = new \stdClass();
+            }
+            if (array_key_exists('properties', $schema)) {
+                $props = $schema['properties'];
+                if (is_array($props) && count($props) === 0) {
+                    $schema['properties'] = new \stdClass();
+                } elseif (is_array($props)) {
+                    foreach ($props as $k => $v) {
+                        $props[$k] = $this->normalizeSchemaProperties($v);
+                    }
+                    $schema['properties'] = $props;
+                }
+            }
+            foreach ($schema as $k => $v) {
+                if ($k === 'properties') {
+                    continue;
+                }
+                if (is_array($v)) {
+                    $schema[$k] = $this->normalizeSchemaProperties($v);
+                }
+            }
+        }
+        return $schema;
     }
 
     /**
