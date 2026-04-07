@@ -521,10 +521,34 @@ function AnthropicMaxConnectorCard( { slug, label, description } ) {
 }
 
 // Register the connector card.
-registerConnector( 'ai-provider-for-anthropic-max/connector', {
+const SLUG = 'ai-provider-for-anthropic-max/connector';
+const CONFIG = {
 	label: __( 'Anthropic Max' ),
 	description: __(
 		'Use Claude with your Max subscription via OAuth. Supports account pool rotation for reliability.'
 	),
 	render: AnthropicMaxConnectorCard,
-} );
+};
+
+// WP core's `routes/connectors-home/content` module runs
+// `registerDefaultConnectors()` from inside an async dynamic import. By the
+// time it executes, our top-level registerConnector() has already populated
+// the store — and the store reducer spreads new config over existing
+// entries, so the default's `args.render = ApiKeyConnector` can overwrite
+// our custom render. We currently dodge this by using a slug that doesn't
+// collide with the PHP-side provider id, but that's fragile (a future
+// upstream change to slug normalization could break it). The proper fix is
+// in WordPress/gutenberg#77116; until that ships we re-assert our
+// registration on five ticks (sync + microtask + setTimeout 0/50/250/1000ms)
+// as defense in depth so our render always ends up last regardless of
+// dynamic-import resolution order.
+function registerOurs() {
+	registerConnector( SLUG, CONFIG );
+}
+
+registerOurs();
+Promise.resolve().then( registerOurs );
+setTimeout( registerOurs, 0 );
+setTimeout( registerOurs, 50 );
+setTimeout( registerOurs, 250 );
+setTimeout( registerOurs, 1000 );

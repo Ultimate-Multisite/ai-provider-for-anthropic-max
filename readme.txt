@@ -3,7 +3,7 @@ Contributors: superdav42
 Tags: ai, anthropic, claude, oauth, max
 Requires at least: 6.9
 Tested up to: 7.0
-Stable tag: 1.0.0
+Stable tag: 1.0.1
 Requires PHP: 7.4
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -64,6 +64,10 @@ Multiple accounts provide failover. If one account hits a rate limit, the plugin
 OAuth tokens are stored in the WordPress options table. Only site administrators with `manage_options` capability can manage the account pool.
 
 == Changelog ==
+
+= 1.0.1 =
+
+* Defensive: re-assert our `registerConnector()` call across multiple ticks (microtask + 0/50/250/1000 ms) so the WP core `registerDefaultConnectors()` auto-register can't clobber the custom card with the generic API-key UI. Today this plugin happens to escape the bug because its JS slug doesn't collide with the PHP-side provider id, but that's fragile. The proper upstream fix is in https://github.com/WordPress/gutenberg/pull/77116 — once that ships in a Gutenberg release, this defense can be removed.
 
 = 1.0.0 =
 
