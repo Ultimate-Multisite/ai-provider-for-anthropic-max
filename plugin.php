@@ -15,8 +15,6 @@
  * @package AnthropicMaxAiProvider
  */
 
-declare(strict_types=1);
-
 namespace AnthropicMaxAiProvider;
 
 if ( ! defined( 'ABSPATH' ) ) {

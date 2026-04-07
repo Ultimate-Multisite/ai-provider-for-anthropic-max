@@ -14,7 +14,7 @@ declare(strict_types=1);
 
 namespace AnthropicMaxAiProvider\Authentication;
 
-use WordPress\AiClient\Providers\Http\Contracts\RequestAuthenticationInterface;
+use WordPress\AiClient\Providers\Http\DTO\ApiKeyRequestAuthentication;
 use WordPress\AiClient\Providers\Http\DTO\Request;
 use AnthropicMaxAiProvider\OAuthPool\PoolManager;
 
@@ -23,7 +23,7 @@ use AnthropicMaxAiProvider\OAuthPool\PoolManager;
  *
  * @since 1.0.0
  */
-class AnthropicOAuthRequestAuthentication implements RequestAuthenticationInterface
+class AnthropicOAuthRequestAuthentication extends ApiKeyRequestAuthentication
 {
     public const ANTHROPIC_API_VERSION = '2023-06-01';
     public const ANTHROPIC_OAUTH_BETA  = 'oauth-2025-04-20';
@@ -53,6 +53,8 @@ class AnthropicOAuthRequestAuthentication implements RequestAuthenticationInterf
     public function __construct(PoolManager $pool)
     {
         $this->pool = $pool;
+        // Parent constructor requires a string; real token is resolved per-request.
+        parent::__construct('');
     }
 
     /**
@@ -116,5 +118,21 @@ class AnthropicOAuthRequestAuthentication implements RequestAuthenticationInterf
     public function getApiKey(): string
     {
         return $this->pool->getActiveToken() ?? '';
+    }
+
+    /**
+     * Returns a JSON schema describing this authentication DTO.
+     *
+     * Required by WithJsonSchemaInterface. OAuth tokens are sourced from the
+     * account pool at runtime, so no user-facing fields are exposed.
+     *
+     * @return array<string, mixed>
+     */
+    public static function getJsonSchema(): array
+    {
+        return [
+            'type'       => 'object',
+            'properties' => [],
+        ];
     }
 }

@@ -53,17 +53,21 @@ class TokenRefresher
         );
 
         if (is_wp_error($response)) {
+            error_log('[anthropic-max] Token refresh WP_Error: ' . $response->get_error_message());
             return null;
         }
 
         $status = wp_remote_retrieve_response_code($response);
+        $body_raw = wp_remote_retrieve_body($response);
         if ($status !== 200) {
+            error_log('[anthropic-max] Token refresh HTTP ' . $status . ' body: ' . $body_raw);
             return null;
         }
 
-        $data = json_decode(wp_remote_retrieve_body($response), true);
+        $data = json_decode($body_raw, true);
 
         if (!is_array($data) || empty($data['access_token'])) {
+            error_log('[anthropic-max] Token refresh invalid payload: ' . $body_raw);
             return null;
         }
 
