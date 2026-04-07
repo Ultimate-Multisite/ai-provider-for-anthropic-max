@@ -2,8 +2,8 @@
 /**
  * Anthropic Max provider for the WordPress AI Client.
  *
- * Registers as a separate provider ('anthropic-max') so it can coexist
- * with the standard API-key-based Anthropic provider.
+ * Registers as a separate provider ('ultimate-ai-connector-anthropic-max')
+ * so it can coexist with the standard API-key-based Anthropic provider.
  *
  * @since 1.0.0
  *
@@ -77,17 +77,25 @@ class AnthropicMaxProvider extends AbstractApiProvider
     /**
      * Creates the provider metadata.
      *
-     * Uses 'anthropic-max' as the provider ID to avoid conflicts
-     * with the standard API-key-based Anthropic provider.
+     * Uses 'ultimate-ai-connector-anthropic-max' as the provider ID. The
+     * `ultimate-ai-connector-` namespace matches the sister plugins
+     * (`ultimate-ai-connector-webllm`, `ultimate-ai-connector-compatible-endpoints`)
+     * and avoids any future collision with another plugin author who might
+     * register a generic 'anthropic-max' provider id.
      *
-     * @since 1.0.0
+     * @since 1.0.0 As 'anthropic-max'.
+     * @since 1.1.0 Renamed to 'ultimate-ai-connector-anthropic-max' for
+     *              consistency with other Ultimate-Multisite connector plugins
+     *              and to make the JS-side `registerConnector()` slug match
+     *              this id (so the WP core Connectors page renders one card
+     *              instead of two).
      *
      * @return ProviderMetadata
      */
     protected static function createProviderMetadata(): ProviderMetadata
     {
         $args = [
-            'anthropic-max',
+            'ultimate-ai-connector-anthropic-max',
             'Anthropic Max',
             ProviderTypeEnum::cloud(),
             null,

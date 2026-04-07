@@ -1,6 +1,6 @@
 {
     "name": "ai-provider-for-anthropic-max",
-    "version": "1.0.1",
+    "version": "1.1.0",
     "private": true,
     "license": "GPL-2.0-or-later",
     "scripts": {

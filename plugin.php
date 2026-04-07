@@ -5,7 +5,7 @@
  * Description: Anthropic provider for the WordPress AI Client using Claude Max OAuth tokens with account pool rotation.
  * Requires at least: 6.9
  * Requires PHP: 7.4
- * Version: 1.0.1
+ * Version: 1.1.0
  * Author: Ultimate Multisite Community
  * Author URI: https://ultimatemultisite.com
  * License: GPL-2.0-or-later
@@ -21,7 +21,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	return;
 }
 
-define( 'ANTHROPIC_MAX_AI_PROVIDER_VERSION', '1.0.1' );
+define( 'ANTHROPIC_MAX_AI_PROVIDER_VERSION', '1.1.0' );
 
 // ---------------------------------------------------------------------------
 // PSR-4 autoloader for src/ classes.
