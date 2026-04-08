@@ -24,6 +24,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 define( 'ANTHROPIC_MAX_AI_PROVIDER_VERSION', '1.0.0' );
+define( 'ANTHROPIC_MAX_AI_PROVIDER_URL', plugin_dir_url( __FILE__ ) );
 
 // ---------------------------------------------------------------------------
 // PSR-4 autoloader for src/ classes.

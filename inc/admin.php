@@ -23,16 +23,21 @@ if ( ! defined( 'ABSPATH' ) ) {
  * is loaded only where it is needed.
  */
 function enqueue_connector_module(): void {
+	$asset_file = __DIR__ . '/../build/connector.js';
+	$version     = file_exists( $asset_file )
+		? filemtime( $asset_file )
+		: ANTHROPIC_MAX_AI_PROVIDER_VERSION;
+
 	wp_register_script_module(
 		'ai-provider-for-anthropic-max',
-		plugins_url( 'build/connector.js', __DIR__ ),
+		ANTHROPIC_MAX_AI_PROVIDER_URL . 'build/connector.js',
 		[
 			[
 				'id'     => '@wordpress/connectors',
 				'import' => 'static',
 			],
 		],
-		ANTHROPIC_MAX_AI_PROVIDER_VERSION
+		$version
 	);
 	wp_enqueue_script_module( 'ai-provider-for-anthropic-max' );
 }
