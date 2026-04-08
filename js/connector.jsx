@@ -178,11 +178,9 @@ function AddAccountForm( { onComplete, onCancel } ) {
 			window.open( data.authorize_url, '_blank', 'noopener' );
 			setStep( 'code' );
 		} catch ( err ) {
-			setError(
-				err instanceof Error
-					? err.message
-					: __( 'Failed to start OAuth flow.' )
-			);
+			// apiFetch throws a plain object {code, message, data} for WP_Error responses,
+			// not an Error instance. Use err?.message to surface the actual server message.
+			setError( err?.message || __( 'Failed to start OAuth flow.' ) );
 		} finally {
 			setIsBusy( false );
 		}
@@ -207,11 +205,9 @@ function AddAccountForm( { onComplete, onCancel } ) {
 			} );
 			onComplete();
 		} catch ( err ) {
-			setError(
-				err instanceof Error
-					? err.message
-					: __( 'Code exchange failed.' )
-			);
+			// apiFetch throws a plain object {code, message, data} for WP_Error responses,
+			// not an Error instance. Use err?.message to surface the actual server message.
+			setError( err?.message || __( 'Code exchange failed.' ) );
 		} finally {
 			setIsBusy( false );
 		}

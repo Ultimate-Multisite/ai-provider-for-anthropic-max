@@ -705,16 +705,25 @@ class PoolManager
         );
 
         if (is_wp_error($response)) {
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('[AnthropicMax] Token exchange wp_error: ' . $response->get_error_message());
+            }
             return null;
         }
 
         $status = wp_remote_retrieve_response_code($response);
         if ($status !== 200) {
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('[AnthropicMax] Token exchange HTTP ' . $status . ': ' . wp_remote_retrieve_body($response));
+            }
             return null;
         }
 
         $data = json_decode(wp_remote_retrieve_body($response), true);
         if (!is_array($data) || empty($data['access_token'])) {
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('[AnthropicMax] Token exchange bad response body: ' . wp_remote_retrieve_body($response));
+            }
             return null;
         }
 
