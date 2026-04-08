@@ -509,7 +509,7 @@ function AnthropicMaxConnectorCard( { slug, label, description } ) {
 
 	return (
 		<ConnectorItem
-			className="connector-item--anthropic-max"
+			className="connector-item--ultimate-ai-connector-anthropic-max"
 			icon={ <Logo /> }
 			name={ label }
 			description={ description }
@@ -521,10 +521,36 @@ function AnthropicMaxConnectorCard( { slug, label, description } ) {
 }
 
 // Register the connector card.
-registerConnector( 'ai-provider-for-anthropic-max/connector', {
+//
+// SLUG matches the PHP provider id from AnthropicMaxProvider::createProviderMetadata()
+// so the WP core Connectors page renders ONE card instead of two (the
+// auto-discovered server entry + a separately-keyed JS entry).
+const SLUG = 'ultimate-ai-connector-anthropic-max';
+const CONFIG = {
 	label: __( 'Anthropic Max' ),
 	description: __(
 		'Use Claude with your Max subscription via OAuth. Supports account pool rotation for reliability.'
 	),
 	render: AnthropicMaxConnectorCard,
-} );
+};
+
+// WP core's `routes/connectors-home/content` module runs
+// `registerDefaultConnectors()` from inside an async dynamic import. By the
+// time it executes, our top-level registerConnector() has already populated
+// the store — and the store reducer spreads new config over existing
+// entries, so the default's `args.render = ApiKeyConnector` would overwrite
+// our custom render. The proper fix is in WordPress/gutenberg#77116; until
+// that ships we re-assert our registration on five ticks (sync + microtask
+// + setTimeout 0/50/250/1000ms) so our render always ends up last regardless
+// of dynamic-import resolution order. Re-registering with the same render
+// reference is idempotent so the redundant calls cost essentially nothing.
+function registerOurs() {
+	registerConnector( SLUG, CONFIG );
+}
+
+registerOurs();
+Promise.resolve().then( registerOurs );
+setTimeout( registerOurs, 0 );
+setTimeout( registerOurs, 50 );
+setTimeout( registerOurs, 250 );
+setTimeout( registerOurs, 1000 );

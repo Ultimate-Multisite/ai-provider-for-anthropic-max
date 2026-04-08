@@ -3,7 +3,7 @@ Contributors: superdav42
 Tags: ai, anthropic, claude, oauth, max
 Requires at least: 6.9
 Tested up to: 7.0
-Stable tag: 1.0.0
+Stable tag: 1.1.0
 Requires PHP: 7.4
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -64,6 +64,12 @@ Multiple accounts provide failover. If one account hits a rate limit, the plugin
 OAuth tokens are stored in the WordPress options table. Only site administrators with `manage_options` capability can manage the account pool.
 
 == Changelog ==
+
+= 1.1.0 =
+
+* **BREAKING**: renamed the AI Client provider id from `anthropic-max` to `ultimate-ai-connector-anthropic-max` for consistency with the sister plugins (`ultimate-ai-connector-webllm`, `ultimate-ai-connector-compatible-endpoints`) and to claim the namespace properly. Code that called `AiClient::defaultRegistry()->getProvider('anthropic-max')` must update the id. Stored OAuth tokens, REST endpoints, and option keys are unchanged so existing setups continue to work.
+* Improved: the JS-side `registerConnector()` slug now matches the PHP provider id, so the WP core Connectors page renders one card instead of two (a previously-hidden duplicate auto-registered card with the generic API-key form is now suppressed).
+* Fix: re-assert our `registerConnector()` call across multiple ticks (microtask + 0/50/250/1000 ms) so the WP core `registerDefaultConnectors()` auto-register can't clobber the custom card with the generic API-key UI. Necessary because matching the slug exposes us to the same race the other Ultimate-Multisite connector plugins hit. The proper upstream fix is in https://github.com/WordPress/gutenberg/pull/77116 — once that ships in a Gutenberg release, this workaround can be removed.
 
 = 1.0.0 =
 
