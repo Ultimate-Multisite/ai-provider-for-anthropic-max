@@ -1,0 +1,102 @@
+name: Deploy
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate version consistency
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+
+          HEADER_VER=$(grep -oP '^\s*\*?\s*Version:\s*\K\S+' plugin.php)
+          CONST_VER=$(grep -oP "define\(\s*'ANTHROPIC_MAX_AI_PROVIDER_VERSION',\s*'\K[^']+" plugin.php)
+          STABLE_VER=$(grep -oP 'Stable tag:\s*\K\S+' readme.txt)
+          PKG_VER=$(jq -r .version package.json)
+          FILE_VER=$(cat VERSION)
+
+          echo "Tag:      $TAG"
+          echo "Header:   $HEADER_VER"
+          echo "Constant: $CONST_VER"
+          echo "Stable:   $STABLE_VER"
+          echo "Package:  $PKG_VER"
+          echo "VERSION:  $FILE_VER"
+
+          FAIL=0
+          for VER in "$HEADER_VER" "$CONST_VER" "$STABLE_VER" "$PKG_VER" "$FILE_VER"; do
+            if [ "$VER" != "$TAG" ]; then
+              echo "::error::Version mismatch: expected $TAG, got $VER"
+              FAIL=1
+            fi
+          done
+
+          if [ "$FAIL" -eq 1 ]; then
+            exit 1
+          fi
+
+          echo "All five version locations match tag $TAG"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Create plugin zip
+        run: |
+          PLUGIN_SLUG="ai-provider-for-anthropic-max"
+          VERSION="${GITHUB_REF#refs/tags/v}"
+
+          # Stage files into a directory named after the plugin slug
+          # so the zip extracts to the correct folder in wp-content/plugins/
+          mkdir "$PLUGIN_SLUG"
+
+          # Copy only the files needed for the distributed plugin
+          cp plugin.php readme.txt LICENSE VERSION "$PLUGIN_SLUG/"
+          cp -r inc src build "$PLUGIN_SLUG/"
+
+          zip -r "${PLUGIN_SLUG}-${VERSION}.zip" "$PLUGIN_SLUG"
+          echo "ZIP_FILE=${PLUGIN_SLUG}-${VERSION}.zip" >> "$GITHUB_ENV"
+
+      - name: Extract changelog for this version
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+
+          # Extract the changelog block for this version from readme.txt
+          # Matches from "= X.Y.Z =" until the next "= " heading or end of file
+          CHANGELOG=$(awk -v ver="$VERSION" '
+            /^= / { if (found) exit; if ($2 == ver) found=1; next }
+            found { print }
+          ' readme.txt)
+
+          # Write to file to avoid shell quoting issues
+          echo "$CHANGELOG" > /tmp/changelog.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+
+          gh release create "v${VERSION}" \
+            "${{ env.ZIP_FILE }}" \
+            --title "v${VERSION}" \
+            --notes-file /tmp/changelog.md
