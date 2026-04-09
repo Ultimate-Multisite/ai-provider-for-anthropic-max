@@ -34,14 +34,23 @@ function Logo() {
 		<svg
 			width={ 40 }
 			height={ 40 }
-			viewBox="0 0 24 24"
+			viewBox="0 0 40 40"
 			fill="none"
 			xmlns="http://www.w3.org/2000/svg"
 		>
-			<path
-				d="M17.304 3.541h-3.483l6.15 16.918h3.483L17.304 3.541zM6.696 3.541.546 20.459h3.483l1.265-3.575h6.41l1.266 3.575h3.483L10.304 3.541H6.696zm-.453 10.872L8.5 8.39l2.257 6.023H6.243z"
+			<text
+				x="20"
+				y="24"
+				textAnchor="middle"
+				dominantBaseline="central"
+				fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+				fontSize="14"
+				fontWeight="800"
+				letterSpacing="0.5"
 				fill="currentColor"
-			/>
+			>
+				MAX
+			</text>
 		</svg>
 	);
 }
@@ -296,7 +305,7 @@ function AddAccountForm( { onComplete, onCancel } ) {
 /**
  * Main connector card component.
  */
-function AnthropicMaxConnectorCard( { slug, label, description } ) {
+function AnthropicMaxConnectorCard( { slug, label, description, logo } ) {
 	const [ accounts, setAccounts ] = useState( [] );
 	const [ isExpanded, setIsExpanded ] = useState( false );
 	const [ isAdding, setIsAdding ] = useState( false );
@@ -510,7 +519,7 @@ function AnthropicMaxConnectorCard( { slug, label, description } ) {
 	return (
 		<ConnectorItem
 			className="connector-item--ultimate-ai-connector-anthropic-max"
-			icon={ <Logo /> }
+			logo={ logo || <Logo /> }
 			name={ label }
 			description={ description }
 			actionArea={ actionArea }
@@ -531,6 +540,7 @@ const CONFIG = {
 	description: __(
 		'Use Claude with your Max subscription via OAuth. Supports account pool rotation for reliability.'
 	),
+	logo: <Logo />,
 	render: AnthropicMaxConnectorCard,
 };
 
