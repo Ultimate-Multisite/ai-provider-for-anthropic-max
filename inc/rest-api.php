@@ -96,27 +96,32 @@ function register_routes(): void {
 	);
 
 	// Remove an account.
+	// Uses POST instead of DELETE because many server configurations (Apache
+	// mod_security, reverse proxies, multisite rewrites) silently convert or
+	// block DELETE requests, causing a 404 at the routing level.
+	// The email is passed in the JSON body to avoid encoding @ in the URL path.
 	register_rest_route(
 		$namespace,
-		'/accounts/(?P<email>[^/]+)',
+		'/accounts/remove',
 		[
-			'methods'             => 'DELETE',
+			'methods'             => 'POST',
 			'callback'            => __NAMESPACE__ . '\\rest_remove_account',
 			'permission_callback' => __NAMESPACE__ . '\\can_manage',
 			'args'                => [
 				'email' => [
 					'required'          => true,
 					'type'              => 'string',
-					'sanitize_callback' => 'sanitize_email',
+					'sanitize_callback' => 'sanitize_text_field',
 				],
 			],
 		]
 	);
 
 	// Refresh a specific account's token.
+	// Email in the JSON body (not the URL path) to avoid encoding @ in the URL.
 	register_rest_route(
 		$namespace,
-		'/accounts/(?P<email>[^/]+)/refresh',
+		'/accounts/refresh',
 		[
 			'methods'             => 'POST',
 			'callback'            => __NAMESPACE__ . '\\rest_refresh_account',
@@ -125,7 +130,7 @@ function register_routes(): void {
 				'email' => [
 					'required'          => true,
 					'type'              => 'string',
-					'sanitize_callback' => 'sanitize_email',
+					'sanitize_callback' => 'sanitize_text_field',
 				],
 			],
 		]

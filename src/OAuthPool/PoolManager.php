@@ -145,6 +145,9 @@ class PoolManager
                 'hasRefresh'    => !empty($account['refresh']),
                 'cooldownUntil' => $account['cooldownUntil'] ?? null,
                 'accountId'     => $account['accountId'] ?? null,
+                // validity is not checked here (avoids an HTTP round-trip per account).
+                // Use the /health endpoint for token validation. null signals "not checked".
+                'validity'      => null,
             ];
         }, $accounts);
     }
@@ -401,7 +404,7 @@ class PoolManager
      * Removes an account from the pool by email.
      *
      * @param string $email The account email to remove.
-     * @return bool Whether an account was found and removed.
+     * @return bool Whether an account was found and successfully removed.
      */
     public function removeAccount(string $email): bool
     {
@@ -419,8 +422,7 @@ class PoolManager
             return false;
         }
 
-        $this->savePool($pool);
-        return true;
+        return $this->savePool($pool);
     }
 
     /**
