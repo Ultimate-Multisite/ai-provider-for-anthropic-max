@@ -1,6 +1,5 @@
 vendor/
 node_modules/
-build/
 *.zip
 .wp-env.override.json
 .agents/loop-state/
