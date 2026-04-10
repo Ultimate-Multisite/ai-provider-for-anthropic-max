@@ -337,10 +337,9 @@ function AnthropicMaxConnectorCard( { slug, label, description, logo } ) {
 		setNotice( null );
 		try {
 			await apiFetch( {
-				method: 'DELETE',
-				path:
-					'/anthropic-max-pool/v1/accounts/' +
-					encodeURIComponent( email ),
+				method: 'POST',
+				path: '/anthropic-max-pool/v1/accounts/remove',
+				data: { email },
 			} );
 			await fetchAccounts();
 		} catch ( err ) {
@@ -362,10 +361,8 @@ function AnthropicMaxConnectorCard( { slug, label, description, logo } ) {
 		try {
 			await apiFetch( {
 				method: 'POST',
-				path:
-					'/anthropic-max-pool/v1/accounts/' +
-					encodeURIComponent( email ) +
-					'/refresh',
+				path: '/anthropic-max-pool/v1/accounts/refresh',
+				data: { email },
 			} );
 			setNotice( {
 				status: 'success',
