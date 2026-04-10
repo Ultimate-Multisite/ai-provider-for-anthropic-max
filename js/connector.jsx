@@ -162,6 +162,51 @@ function AccountRow( { account, onRemove, onRefresh, isBusy } ) {
 }
 
 /**
+ * Detect whether we are running inside a sandboxed environment (such as
+ * WordPress Playground) where opening external OAuth popups will fail.
+ *
+ * WordPress Playground runs WordPress inside a Service Worker + iframe
+ * sandbox. External sites like claude.ai send X-Frame-Options / CSP
+ * headers that cause ERR_BLOCKED_BY_RESPONSE when opened from within
+ * the sandbox. We detect this proactively so we can show a manual link
+ * instead of a broken popup.
+ *
+ * @return {boolean} True if the environment is sandboxed.
+ */
+function isSandboxedEnvironment() {
+	// 1. WordPress Playground exposes this global.
+	if ( window.wp?.playground ) {
+		return true;
+	}
+
+	// 2. Playground URLs contain playground.wordpress.net.
+	try {
+		const loc = window.location.href;
+		if (
+			loc.includes( 'playground.wordpress.net' ) ||
+			loc.includes( 'playground.wordpress.org' )
+		) {
+			return true;
+		}
+	} catch ( e ) {
+		// Cross-origin access may throw — treat as sandboxed.
+		return true;
+	}
+
+	// 3. Running inside a cross-origin iframe (common sandbox pattern).
+	try {
+		if ( window.parent !== window && window.parent.location.href ) {
+			// Same-origin iframe — not necessarily sandboxed.
+		}
+	} catch ( e ) {
+		// Cross-origin iframe — likely sandboxed.
+		return true;
+	}
+
+	return false;
+}
+
+/**
  * OAuth flow form: email input + authorize + paste code.
  */
 function AddAccountForm( { onComplete, onCancel } ) {
@@ -169,8 +214,10 @@ function AddAccountForm( { onComplete, onCancel } ) {
 	const [ email, setEmail ] = useState( '' );
 	const [ oauthState, setOauthState ] = useState( '' );
 	const [ authCode, setAuthCode ] = useState( '' );
+	const [ authorizeUrl, setAuthorizeUrl ] = useState( '' );
 	const [ isBusy, setIsBusy ] = useState( false );
 	const [ error, setError ] = useState( null );
+	const [ showManualLink, setShowManualLink ] = useState( false );
 
 	const handleStartOAuth = async () => {
 		if ( ! email || ! email.includes( '@' ) ) {
@@ -184,7 +231,17 @@ function AddAccountForm( { onComplete, onCancel } ) {
 				path: '/anthropic-max-pool/v1/authorize',
 			} );
 			setOauthState( data.state );
-			window.open( data.authorize_url, '_blank', 'noopener' );
+			setAuthorizeUrl( data.authorize_url );
+
+			if ( isSandboxedEnvironment() ) {
+				// In sandboxed environments (e.g. WordPress Playground),
+				// popups to claude.ai are blocked. Show the URL directly.
+				setShowManualLink( true );
+			} else {
+				// Normal environment — open the popup.
+				window.open( data.authorize_url, '_blank', 'noopener' );
+				setShowManualLink( false );
+			}
 			setStep( 'code' );
 		} catch ( err ) {
 			setError(
@@ -266,11 +323,79 @@ function AddAccountForm( { onComplete, onCancel } ) {
 			) }
 			{ step === 'code' && (
 				<Fragment>
-					<Notice status="info" isDismissible={ false }>
-						{ __(
-							'A new window opened for Claude authorization. Log in, then copy the authorization code shown and paste it below.'
-						) }
-					</Notice>
+					{ showManualLink ? (
+						<Notice status="warning" isDismissible={ false }>
+							<VStack spacing={ 2 }>
+								<span>
+									{ __(
+										'Popups to claude.ai are blocked in this environment (e.g. WordPress Playground). Open the authorization link below in a new browser tab, log in, then copy the code shown and paste it here.'
+									) }
+								</span>
+								<HStack spacing={ 2 } wrap>
+									<a
+										href={ authorizeUrl }
+										target="_blank"
+										rel="noopener noreferrer"
+										style={ {
+											fontWeight: 500,
+										} }
+									>
+										{ __(
+											'Open Claude Authorization Page'
+										) }
+									</a>
+									<Button
+										variant="link"
+										style={ {
+											fontSize: '12px',
+										} }
+										onClick={ () => {
+											navigator.clipboard
+												.writeText(
+													authorizeUrl
+												)
+												.then( () =>
+													setError(
+														null
+													)
+												);
+										} }
+									>
+										{ __(
+											'Copy link'
+										) }
+									</Button>
+								</HStack>
+							</VStack>
+						</Notice>
+					) : (
+						<Fragment>
+							<Notice
+								status="info"
+								isDismissible={ false }
+							>
+								{ __(
+									'A new window opened for Claude authorization. Log in, then copy the authorization code shown and paste it below.'
+								) }
+							</Notice>
+							{ ! showManualLink && authorizeUrl && (
+								<Button
+									variant="link"
+									onClick={ () =>
+										setShowManualLink( true )
+									}
+									style={ {
+										fontSize: '12px',
+										padding: 0,
+									} }
+								>
+									{ __(
+										"Window didn't open or was blocked? Click here for a direct link."
+									) }
+								</Button>
+							) }
+						</Fragment>
+					) }
 					<TextControl
 						__nextHasNoMarginBottom
 						__next40pxDefaultSize
