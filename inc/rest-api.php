@@ -107,7 +107,12 @@ function register_routes(): void {
 				'email' => [
 					'required'          => true,
 					'type'              => 'string',
-					'sanitize_callback' => 'sanitize_email',
+					// Use sanitize_text_field instead of sanitize_email: the email was
+					// already validated when the account was added. sanitize_email strips
+					// characters valid in some email addresses (e.g. underscores in domain
+					// subdomains, local-only domains) and returns '' for anything it
+					// considers invalid, causing the pool lookup to fail with a 404.
+					'sanitize_callback' => 'sanitize_text_field',
 				],
 			],
 		]
@@ -125,7 +130,8 @@ function register_routes(): void {
 				'email' => [
 					'required'          => true,
 					'type'              => 'string',
-					'sanitize_callback' => 'sanitize_email',
+					// Same rationale as the DELETE route above.
+					'sanitize_callback' => 'sanitize_text_field',
 				],
 			],
 		]
