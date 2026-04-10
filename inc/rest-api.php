@@ -96,22 +96,21 @@ function register_routes(): void {
 	);
 
 	// Remove an account.
+	// Uses POST instead of DELETE because many server configurations (Apache
+	// mod_security, reverse proxies, multisite rewrites) silently convert or
+	// block DELETE requests, causing a 404 at the routing level.
+	// The email is passed in the JSON body to avoid encoding @ in the URL path.
 	register_rest_route(
 		$namespace,
-		'/accounts/(?P<email>[^/]+)',
+		'/accounts/remove',
 		[
-			'methods'             => 'DELETE',
+			'methods'             => 'POST',
 			'callback'            => __NAMESPACE__ . '\\rest_remove_account',
 			'permission_callback' => __NAMESPACE__ . '\\can_manage',
 			'args'                => [
 				'email' => [
 					'required'          => true,
 					'type'              => 'string',
-					// Use sanitize_text_field instead of sanitize_email: the email was
-					// already validated when the account was added. sanitize_email strips
-					// characters valid in some email addresses (e.g. underscores in domain
-					// subdomains, local-only domains) and returns '' for anything it
-					// considers invalid, causing the pool lookup to fail with a 404.
 					'sanitize_callback' => 'sanitize_text_field',
 				],
 			],
@@ -119,9 +118,10 @@ function register_routes(): void {
 	);
 
 	// Refresh a specific account's token.
+	// Email in the JSON body (not the URL path) to avoid encoding @ in the URL.
 	register_rest_route(
 		$namespace,
-		'/accounts/(?P<email>[^/]+)/refresh',
+		'/accounts/refresh',
 		[
 			'methods'             => 'POST',
 			'callback'            => __NAMESPACE__ . '\\rest_refresh_account',
@@ -130,7 +130,6 @@ function register_routes(): void {
 				'email' => [
 					'required'          => true,
 					'type'              => 'string',
-					// Same rationale as the DELETE route above.
 					'sanitize_callback' => 'sanitize_text_field',
 				],
 			],
