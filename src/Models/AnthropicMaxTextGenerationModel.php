@@ -270,9 +270,6 @@ class AnthropicMaxTextGenerationModel extends AbstractApiBasedModel implements T
         $webSearch            = $config->getWebSearch();
         if (is_array($functionDeclarations) || $webSearch) {
             $params['tools'] = $this->prepareToolsParam($functionDeclarations, $webSearch);
-            if (defined('WP_DEBUG') && WP_DEBUG) {
-                error_log('[anthropic-max] tools payload: ' . wp_json_encode($params['tools']));
-            }
         }
 
         $customOptions = $config->getCustomOptions();
