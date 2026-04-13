@@ -36,7 +36,7 @@ This plugin extends the WordPress AI Client to support **Anthropic Claude** usin
 5. Paste the authorization code back into the settings.
 6. Repeat to add more accounts for pool rotation.
 
-The plugin registers as a separate provider (`anthropic-max`) and coexists with the standard API-key-based Anthropic provider.
+The plugin registers as a separate provider (`ultimate-ai-connector-anthropic-max`) and coexists with the standard API-key-based Anthropic provider.
 
 == Installation ==
 
@@ -53,7 +53,7 @@ Claude Max is Anthropic's premium subscription plan that provides access to Clau
 
 = Can I use this alongside the standard Anthropic provider? =
 
-Yes. This plugin registers as "Anthropic Max" (`anthropic-max`), separate from the standard "Anthropic" (`anthropic`) provider. Both can be active simultaneously.
+Yes. This plugin registers as "Anthropic Max" (`ultimate-ai-connector-anthropic-max`), separate from the standard "Anthropic" (`anthropic`) provider. Both can be active simultaneously.
 
 = Why add multiple accounts? =
 

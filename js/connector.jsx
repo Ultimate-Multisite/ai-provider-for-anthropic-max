@@ -657,14 +657,14 @@ function AnthropicMaxConnectorCard( { slug, label, description, logo } ) {
 // so the WP core Connectors page renders ONE card instead of two (the
 // auto-discovered server entry + a separately-keyed JS entry).
 const SLUG = 'ultimate-ai-connector-anthropic-max';
-const CONFIG = {
+const CONFIG = Object.freeze( {
 	label: __( 'Anthropic Max' ),
 	description: __(
 		'Use Claude with your Max subscription via OAuth. Supports account pool rotation for reliability.'
 	),
 	logo: <Logo />,
 	render: AnthropicMaxConnectorCard,
-};
+} );
 
 // WP core's `routes/connectors-home/content` module runs
 // `registerDefaultConnectors()` from inside an async dynamic import. By the
