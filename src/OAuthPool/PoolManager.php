@@ -75,6 +75,20 @@ class PoolManager
     public const REQUIRED_SCOPE = 'user:inference';
 
     /**
+     * Return statuses for removeAccount().
+     *
+     * REMOVE_NOT_FOUND  — no account with the given email exists in the pool.
+     * REMOVE_OK         — account was found, removed, and the pool was saved.
+     * REMOVE_SAVE_ERROR — account was found and removed from memory but the
+     *                     database save failed (DB-level persistence error).
+     *
+     * Callers should map REMOVE_NOT_FOUND → 404 and REMOVE_SAVE_ERROR → 500.
+     */
+    public const REMOVE_NOT_FOUND  = 'not_found';
+    public const REMOVE_OK         = 'ok';
+    public const REMOVE_SAVE_ERROR = 'save_error';
+
+    /**
      * Singleton instance.
      *
      * @var self|null
@@ -403,10 +417,15 @@ class PoolManager
     /**
      * Removes an account from the pool by email.
      *
+     * Returns one of the REMOVE_* class constants to distinguish outcomes:
+     *   - REMOVE_NOT_FOUND  — no account with the given email exists.
+     *   - REMOVE_OK         — account removed and pool saved successfully.
+     *   - REMOVE_SAVE_ERROR — account removed from memory but DB save failed.
+     *
      * @param string $email The account email to remove.
-     * @return bool Whether an account was found and successfully removed.
+     * @return string One of the REMOVE_* class constants.
      */
-    public function removeAccount(string $email): bool
+    public function removeAccount(string $email): string
     {
         $pool     = $this->loadPool();
         $original = count($pool['accounts']);
@@ -419,10 +438,10 @@ class PoolManager
         ));
 
         if (count($pool['accounts']) === $original) {
-            return false;
+            return self::REMOVE_NOT_FOUND;
         }
 
-        return $this->savePool($pool);
+        return $this->savePool($pool) ? self::REMOVE_OK : self::REMOVE_SAVE_ERROR;
     }
 
     /**

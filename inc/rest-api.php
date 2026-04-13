@@ -254,18 +254,31 @@ function rest_exchange_code( \WP_REST_Request $request ) {
 /**
  * Removes an account from the pool.
  *
+ * Maps PoolManager::REMOVE_NOT_FOUND → 404, REMOVE_SAVE_ERROR → 500,
+ * and REMOVE_OK → 200 so callers can distinguish "account did not exist"
+ * from "account was removed but the database write failed".
+ *
  * @param \WP_REST_Request $request The request object.
  * @return \WP_REST_Response|\WP_Error
  */
 function rest_remove_account( \WP_REST_Request $request ) {
-	$email = $request->get_param( 'email' );
-	$pool  = PoolManager::getInstance();
+	$email  = $request->get_param( 'email' );
+	$pool   = PoolManager::getInstance();
+	$result = $pool->removeAccount( $email );
 
-	if ( ! $pool->removeAccount( $email ) ) {
+	if ( $result === PoolManager::REMOVE_NOT_FOUND ) {
 		return new \WP_Error(
 			'not_found',
 			__( 'Account not found in pool.', 'ai-provider-for-anthropic-max' ),
 			[ 'status' => 404 ]
+		);
+	}
+
+	if ( $result === PoolManager::REMOVE_SAVE_ERROR ) {
+		return new \WP_Error(
+			'save_failed',
+			__( 'Account removed but could not be saved to the database.', 'ai-provider-for-anthropic-max' ),
+			[ 'status' => 500 ]
 		);
 	}
 
