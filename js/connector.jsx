@@ -1,9 +1,16 @@
 /**
  * AI Provider for Anthropic Max -- Connectors page integration.
  *
- * Registers a card on Settings > Connectors that lets admins manage
- * the Anthropic Max OAuth account pool: add, remove, refresh, and
- * health-check accounts used for Claude Max subscriptions.
+ * Registers connector cards on Settings > Connectors for each supported
+ * subscription plan provider:
+ *
+ *   - Anthropic Max         (OAuth PKCE + paste-code)
+ *   - OpenAI ChatGPT/Codex  (OAuth PKCE + paste-code from localhost callback)
+ *   - Cursor Pro            (manual token paste — Cursor has no public OAuth)
+ *   - Google AI Pro         (OAuth PKCE OOB + paste-code)
+ *
+ * Each card uses the same generic add/list/remove/refresh UI, configured
+ * by a per-provider config object (mode, label, icon, REST namespace).
  *
  * @package AnthropicMaxAiProvider
  */
@@ -17,6 +24,7 @@ const { createElement, useState, useEffect, useCallback, Fragment } = wp.element
 const {
 	Button,
 	TextControl,
+	TextareaControl,
 	Spinner,
 	Notice,
 	__experimentalHStack: HStack,
@@ -26,10 +34,76 @@ const {
 const { __ } = wp.i18n;
 const apiFetch = wp.apiFetch;
 
-/**
- * Anthropic logo icon.
- */
-function Logo() {
+const REST_NS = '/anthropic-max-pool/v1';
+
+// ---------------------------------------------------------------------------
+// Per-provider client config.
+// Mirrors src/OAuthPool/ProviderConfig.php.
+// ---------------------------------------------------------------------------
+const PROVIDERS = {
+	anthropic: {
+		id: 'anthropic',
+		slug: 'ultimate-ai-connector-anthropic-max',
+		label: __( 'Anthropic Max' ),
+		description: __(
+			'Use Claude with your Max subscription via OAuth. Supports account pool rotation for reliability.'
+		),
+		mode: 'oauth-paste',
+		emailRequired: true,
+		instructions: __(
+			'A new window opened for Claude authorization. Log in, then copy the authorization code shown and paste it below.'
+		),
+		iconText: 'MAX',
+	},
+	openai: {
+		id: 'openai',
+		slug: 'ultimate-ai-connector-openai-codex',
+		label: __( 'OpenAI ChatGPT/Codex' ),
+		description: __(
+			'Use ChatGPT Plus/Pro or Codex via OAuth. Paste the auth code from the localhost redirect.'
+		),
+		mode: 'oauth-paste',
+		emailRequired: true,
+		instructions: __(
+			'After signing in, OpenAI redirects to a localhost URL. Copy the entire URL (or just the code+state value) from your browser bar and paste it below.'
+		),
+		iconText: 'GPT',
+	},
+	cursor: {
+		id: 'cursor',
+		slug: 'ultimate-ai-connector-cursor-pro',
+		label: __( 'Cursor Pro' ),
+		description: __(
+			'Use Cursor Pro tokens. Cursor has no public OAuth — paste your access/refresh tokens from the IDE.'
+		),
+		mode: 'manual-token',
+		emailRequired: false,
+		instructions: __(
+			'Find your tokens in Cursor IDE: ~/.cursor/auth.json (Linux/macOS) or %APPDATA%/Cursor/auth.json (Windows). Email is auto-derived from the token.'
+		),
+		iconText: 'CUR',
+	},
+	google: {
+		id: 'google',
+		slug: 'ultimate-ai-connector-google-ai-pro',
+		label: __( 'Google AI Pro' ),
+		description: __(
+			'Use Google AI Pro/Ultra or Workspace Gemini via OAuth. Paste the OOB code shown by Google.'
+		),
+		mode: 'oauth-paste',
+		emailRequired: true,
+		instructions: __(
+			'After signing in, Google shows a code in the browser. Copy and paste it below.'
+		),
+		iconText: 'GAI',
+	},
+};
+
+// ---------------------------------------------------------------------------
+// Shared UI primitives.
+// ---------------------------------------------------------------------------
+
+function ProviderLogo( { text } ) {
 	return (
 		<svg
 			width={ 40 }
@@ -44,20 +118,17 @@ function Logo() {
 				textAnchor="middle"
 				dominantBaseline="central"
 				fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
-				fontSize="14"
+				fontSize={ text.length > 3 ? 11 : 14 }
 				fontWeight="800"
 				letterSpacing="0.5"
 				fill="currentColor"
 			>
-				MAX
+				{ text }
 			</text>
 		</svg>
 	);
 }
 
-/**
- * Green "Connected" badge.
- */
 function ConnectedBadge( { count } ) {
 	return (
 		<span
@@ -78,9 +149,6 @@ function ConnectedBadge( { count } ) {
 	);
 }
 
-/**
- * Status badge for an individual account.
- */
 function StatusBadge( { status, validity } ) {
 	const colors = {
 		active: { color: '#345b37', bg: '#eff8f0' },
@@ -89,12 +157,10 @@ function StatusBadge( { status, validity } ) {
 		'refresh-failed': { color: '#cc1818', bg: '#fce8e8' },
 	};
 	const c = colors[ status ] || colors.idle;
-
 	let label = status;
 	if ( validity === 'invalid' ) {
 		label = 'invalid token';
 	}
-
 	return (
 		<span
 			style={ {
@@ -111,10 +177,7 @@ function StatusBadge( { status, validity } ) {
 	);
 }
 
-/**
- * Single account row in the pool list.
- */
-function AccountRow( { account, onRemove, onRefresh, isBusy } ) {
+function AccountRow( { account, onRemove, onRefresh, isBusy, providerSupportsRefresh } ) {
 	return (
 		<HStack
 			spacing={ 3 }
@@ -127,10 +190,7 @@ function AccountRow( { account, onRemove, onRefresh, isBusy } ) {
 			<span style={ { flex: 1, fontWeight: 500 } }>
 				{ account.email }
 			</span>
-			<StatusBadge
-				status={ account.status }
-				validity={ account.validity }
-			/>
+			<StatusBadge status={ account.status } validity={ account.validity } />
 			<span style={ { fontSize: '12px', color: '#757575' } }>
 				{ account.tokenExpired
 					? __( 'expired' )
@@ -140,14 +200,16 @@ function AccountRow( { account, onRemove, onRefresh, isBusy } ) {
 					  __( 'remaining' )
 					: '' }
 			</span>
-			<Button
-				variant="tertiary"
-				size="small"
-				onClick={ () => onRefresh( account.email ) }
-				disabled={ isBusy || ! account.hasRefresh }
-			>
-				{ __( 'Refresh' ) }
-			</Button>
+			{ providerSupportsRefresh && (
+				<Button
+					variant="tertiary"
+					size="small"
+					onClick={ () => onRefresh( account.email ) }
+					disabled={ isBusy || ! account.hasRefresh }
+				>
+					{ __( 'Refresh' ) }
+				</Button>
+			) }
 			<Button
 				variant="tertiary"
 				size="small"
@@ -161,25 +223,14 @@ function AccountRow( { account, onRemove, onRefresh, isBusy } ) {
 	);
 }
 
-/**
- * Detect whether we are running inside a sandboxed environment (such as
- * WordPress Playground) where opening external OAuth popups will fail.
- *
- * WordPress Playground runs WordPress inside a Service Worker + iframe
- * sandbox. External sites like claude.ai send X-Frame-Options / CSP
- * headers that cause ERR_BLOCKED_BY_RESPONSE when opened from within
- * the sandbox. We detect this proactively so we can show a manual link
- * instead of a broken popup.
- *
- * @return {boolean} True if the environment is sandboxed.
- */
+// ---------------------------------------------------------------------------
+// Sandboxed environment detection (e.g. WordPress Playground).
+// ---------------------------------------------------------------------------
+
 function isSandboxedEnvironment() {
-	// 1. WordPress Playground exposes this global.
 	if ( window.wp?.playground ) {
 		return true;
 	}
-
-	// 2. Playground URLs contain playground.wordpress.net.
 	try {
 		const loc = window.location.href;
 		if (
@@ -189,28 +240,25 @@ function isSandboxedEnvironment() {
 			return true;
 		}
 	} catch ( e ) {
-		// Cross-origin access may throw — treat as sandboxed.
 		return true;
 	}
-
-	// 3. Running inside a cross-origin iframe (common sandbox pattern).
 	try {
 		if ( window.parent !== window && window.parent.location.href ) {
-			// Same-origin iframe — not necessarily sandboxed.
+			// Same-origin — not necessarily sandboxed.
 		}
 	} catch ( e ) {
-		// Cross-origin iframe — likely sandboxed.
 		return true;
 	}
-
 	return false;
 }
 
-/**
- * OAuth flow form: email input + authorize + paste code.
- */
-function AddAccountForm( { onComplete, onCancel } ) {
-	const [ step, setStep ] = useState( 'email' );
+// ---------------------------------------------------------------------------
+// OAuth paste-code add form (anthropic, openai, google).
+// ---------------------------------------------------------------------------
+
+function OAuthAddForm( { providerCfg, onComplete, onCancel } ) {
+	const { id, label, instructions, emailRequired } = providerCfg;
+	const [ step, setStep ] = useState( emailRequired ? 'email' : 'authorize' );
 	const [ email, setEmail ] = useState( '' );
 	const [ oauthState, setOauthState ] = useState( '' );
 	const [ authCode, setAuthCode ] = useState( '' );
@@ -220,7 +268,7 @@ function AddAccountForm( { onComplete, onCancel } ) {
 	const [ showManualLink, setShowManualLink ] = useState( false );
 
 	const handleStartOAuth = async () => {
-		if ( ! email || ! email.includes( '@' ) ) {
+		if ( emailRequired && ( ! email || ! email.includes( '@' ) ) ) {
 			setError( __( 'Enter a valid email address.' ) );
 			return;
 		}
@@ -228,26 +276,20 @@ function AddAccountForm( { onComplete, onCancel } ) {
 		setIsBusy( true );
 		try {
 			const data = await apiFetch( {
-				path: '/anthropic-max-pool/v1/authorize',
+				path: `${ REST_NS }/${ id }/authorize`,
 			} );
 			setOauthState( data.state );
 			setAuthorizeUrl( data.authorize_url );
-
 			if ( isSandboxedEnvironment() ) {
-				// In sandboxed environments (e.g. WordPress Playground),
-				// popups to claude.ai are blocked. Show the URL directly.
 				setShowManualLink( true );
 			} else {
-				// Normal environment — open the popup.
 				window.open( data.authorize_url, '_blank', 'noopener' );
 				setShowManualLink( false );
 			}
 			setStep( 'code' );
 		} catch ( err ) {
 			setError(
-				err instanceof Error
-					? err.message
-					: __( 'Failed to start OAuth flow.' )
+				err instanceof Error ? err.message : __( 'Failed to start OAuth flow.' )
 			);
 		} finally {
 			setIsBusy( false );
@@ -264,19 +306,17 @@ function AddAccountForm( { onComplete, onCancel } ) {
 		try {
 			await apiFetch( {
 				method: 'POST',
-				path: '/anthropic-max-pool/v1/exchange',
+				path: `${ REST_NS }/${ id }/exchange`,
 				data: {
 					code: authCode.trim(),
 					state: oauthState,
-					email,
+					email: email || 'unknown',
 				},
 			} );
 			onComplete();
 		} catch ( err ) {
 			setError(
-				err instanceof Error
-					? err.message
-					: __( 'Code exchange failed.' )
+				err instanceof Error ? err.message : __( 'Code exchange failed.' )
 			);
 		} finally {
 			setIsBusy( false );
@@ -290,19 +330,19 @@ function AddAccountForm( { onComplete, onCancel } ) {
 					{ error }
 				</Notice>
 			) }
-			{ step === 'email' && (
+			{ step === 'email' && emailRequired && (
 				<Fragment>
 					<TextControl
 						__nextHasNoMarginBottom
 						__next40pxDefaultSize
-						label={ __( 'Claude Max Account Email' ) }
+						label={ sprintf__( '%s Account Email', label ) }
 						type="email"
 						value={ email }
 						onChange={ setEmail }
 						placeholder="you@example.com"
 						disabled={ isBusy }
 						help={ __(
-							'The email address of your Claude Max subscription account.'
+							'The email address of your subscription account.'
 						) }
 					/>
 					<HStack spacing={ 2 }>
@@ -313,7 +353,7 @@ function AddAccountForm( { onComplete, onCancel } ) {
 							disabled={ isBusy || ! email }
 							isBusy={ isBusy }
 						>
-							{ __( 'Authorize with Claude' ) }
+							{ __( 'Authorize' ) }
 						</Button>
 						<Button variant="tertiary" onClick={ onCancel }>
 							{ __( 'Cancel' ) }
@@ -328,7 +368,7 @@ function AddAccountForm( { onComplete, onCancel } ) {
 							<VStack spacing={ 2 }>
 								<span>
 									{ __(
-										'Popups to claude.ai are blocked in this environment (e.g. WordPress Playground). Open the authorization link below in a new browser tab, log in, then copy the code shown and paste it here.'
+										'Popups are blocked in this environment. Open the authorization link below in a new browser tab, log in, then copy the code shown and paste it here.'
 									) }
 								</span>
 								<HStack spacing={ 2 } wrap>
@@ -336,58 +376,34 @@ function AddAccountForm( { onComplete, onCancel } ) {
 										href={ authorizeUrl }
 										target="_blank"
 										rel="noopener noreferrer"
-										style={ {
-											fontWeight: 500,
-										} }
+										style={ { fontWeight: 500 } }
 									>
-										{ __(
-											'Open Claude Authorization Page'
-										) }
+										{ __( 'Open Authorization Page' ) }
 									</a>
 									<Button
 										variant="link"
-										style={ {
-											fontSize: '12px',
-										} }
+										style={ { fontSize: '12px' } }
 										onClick={ () => {
 											navigator.clipboard
-												.writeText(
-													authorizeUrl
-												)
-												.then( () =>
-													setError(
-														null
-													)
-												);
+												.writeText( authorizeUrl )
+												.then( () => setError( null ) );
 										} }
 									>
-										{ __(
-											'Copy link'
-										) }
+										{ __( 'Copy link' ) }
 									</Button>
 								</HStack>
 							</VStack>
 						</Notice>
 					) : (
 						<Fragment>
-							<Notice
-								status="info"
-								isDismissible={ false }
-							>
-								{ __(
-									'A new window opened for Claude authorization. Log in, then copy the authorization code shown and paste it below.'
-								) }
+							<Notice status="info" isDismissible={ false }>
+								{ instructions }
 							</Notice>
 							{ ! showManualLink && authorizeUrl && (
 								<Button
 									variant="link"
-									onClick={ () =>
-										setShowManualLink( true )
-									}
-									style={ {
-										fontSize: '12px',
-										padding: 0,
-									} }
+									onClick={ () => setShowManualLink( true ) }
+									style={ { fontSize: '12px', padding: 0 } }
 								>
 									{ __(
 										"Window didn't open or was blocked? Click here for a direct link."
@@ -399,11 +415,11 @@ function AddAccountForm( { onComplete, onCancel } ) {
 					<TextControl
 						__nextHasNoMarginBottom
 						__next40pxDefaultSize
-						label={ __( 'Authorization Code' ) }
+						label={ __( 'Authorization Code or Redirect URL' ) }
 						value={ authCode }
 						onChange={ setAuthCode }
 						placeholder={ __(
-							'Paste the code from the Claude window'
+							'Paste the code (or the full localhost URL you were redirected to)'
 						) }
 						disabled={ isBusy }
 					/>
@@ -427,10 +443,110 @@ function AddAccountForm( { onComplete, onCancel } ) {
 	);
 }
 
-/**
- * Main connector card component.
- */
-function AnthropicMaxConnectorCard( { slug, label, description, logo } ) {
+// ---------------------------------------------------------------------------
+// Manual-token add form (cursor, or any provider as fallback).
+// ---------------------------------------------------------------------------
+
+function ManualTokenAddForm( { providerCfg, onComplete, onCancel } ) {
+	const { id, label, instructions } = providerCfg;
+	const [ accessToken, setAccessToken ] = useState( '' );
+	const [ refreshToken, setRefreshToken ] = useState( '' );
+	const [ email, setEmail ] = useState( '' );
+	const [ isBusy, setIsBusy ] = useState( false );
+	const [ error, setError ] = useState( null );
+
+	const handleSubmit = async () => {
+		if ( ! accessToken.trim() ) {
+			setError( __( 'Paste the access token.' ) );
+			return;
+		}
+		setError( null );
+		setIsBusy( true );
+		try {
+			await apiFetch( {
+				method: 'POST',
+				path: `${ REST_NS }/${ id }/manual`,
+				data: {
+					access_token: accessToken.trim(),
+					refresh_token: refreshToken.trim(),
+					email: email.trim(),
+				},
+			} );
+			onComplete();
+		} catch ( err ) {
+			setError(
+				err instanceof Error ? err.message : __( 'Failed to add account.' )
+			);
+		} finally {
+			setIsBusy( false );
+		}
+	};
+
+	return (
+		<VStack spacing={ 3 } style={ { marginTop: '12px' } }>
+			{ error && (
+				<Notice status="error" isDismissible={ false }>
+					{ error }
+				</Notice>
+			) }
+			<Notice status="info" isDismissible={ false }>
+				{ instructions }
+			</Notice>
+			<TextareaControl
+				__nextHasNoMarginBottom
+				label={ __( 'Access Token' ) }
+				value={ accessToken }
+				onChange={ setAccessToken }
+				rows={ 3 }
+				disabled={ isBusy }
+			/>
+			<TextareaControl
+				__nextHasNoMarginBottom
+				label={ __( 'Refresh Token (optional)' ) }
+				value={ refreshToken }
+				onChange={ setRefreshToken }
+				rows={ 3 }
+				disabled={ isBusy }
+			/>
+			<TextControl
+				__nextHasNoMarginBottom
+				__next40pxDefaultSize
+				label={ __( 'Email (optional — auto-derived from the token if blank)' ) }
+				type="email"
+				value={ email }
+				onChange={ setEmail }
+				placeholder="you@example.com"
+				disabled={ isBusy }
+			/>
+			<HStack spacing={ 2 }>
+				<Button
+					__next40pxDefaultSize
+					variant="primary"
+					onClick={ handleSubmit }
+					disabled={ isBusy || ! accessToken }
+					isBusy={ isBusy }
+				>
+					{ sprintf__( 'Add %s Account', label ) }
+				</Button>
+				<Button variant="tertiary" onClick={ onCancel }>
+					{ __( 'Cancel' ) }
+				</Button>
+			</HStack>
+		</VStack>
+	);
+}
+
+// Tiny sprintf shim — avoids pulling in @wordpress/i18n.sprintf.
+function sprintf__( fmt, value ) {
+	return fmt.replace( '%s', value );
+}
+
+// ---------------------------------------------------------------------------
+// Generic provider connector card.
+// ---------------------------------------------------------------------------
+
+function ProviderConnectorCard( { providerCfg } ) {
+	const { id, label, description, mode, iconText } = providerCfg;
 	const [ accounts, setAccounts ] = useState( [] );
 	const [ isExpanded, setIsExpanded ] = useState( false );
 	const [ isAdding, setIsAdding ] = useState( false );
@@ -439,11 +555,12 @@ function AnthropicMaxConnectorCard( { slug, label, description, logo } ) {
 	const [ notice, setNotice ] = useState( null );
 
 	const isConnected = accounts.length > 0;
+	const supportsRefresh = mode === 'oauth-paste'; // Manual-token providers can't refresh.
 
 	const fetchAccounts = useCallback( async () => {
 		try {
 			const data = await apiFetch( {
-				path: '/anthropic-max-pool/v1/accounts',
+				path: `${ REST_NS }/${ id }/accounts`,
 			} );
 			setAccounts( Array.isArray( data ) ? data : [] );
 		} catch {
@@ -451,7 +568,7 @@ function AnthropicMaxConnectorCard( { slug, label, description, logo } ) {
 		} finally {
 			setIsLoading( false );
 		}
-	}, [] );
+	}, [ id ] );
 
 	useEffect( () => {
 		fetchAccounts();
@@ -463,7 +580,7 @@ function AnthropicMaxConnectorCard( { slug, label, description, logo } ) {
 		try {
 			await apiFetch( {
 				method: 'POST',
-				path: '/anthropic-max-pool/v1/accounts/remove',
+				path: `${ REST_NS }/${ id }/accounts/remove`,
 				data: { email },
 			} );
 			await fetchAccounts();
@@ -471,9 +588,7 @@ function AnthropicMaxConnectorCard( { slug, label, description, logo } ) {
 			setNotice( {
 				status: 'error',
 				message:
-					err instanceof Error
-						? err.message
-						: __( 'Failed to remove account.' ),
+					err instanceof Error ? err.message : __( 'Failed to remove account.' ),
 			} );
 		} finally {
 			setIsBusy( false );
@@ -486,21 +601,15 @@ function AnthropicMaxConnectorCard( { slug, label, description, logo } ) {
 		try {
 			await apiFetch( {
 				method: 'POST',
-				path: '/anthropic-max-pool/v1/accounts/refresh',
+				path: `${ REST_NS }/${ id }/accounts/refresh`,
 				data: { email },
 			} );
-			setNotice( {
-				status: 'success',
-				message: __( 'Token refreshed.' ),
-			} );
+			setNotice( { status: 'success', message: __( 'Token refreshed.' ) } );
 			await fetchAccounts();
 		} catch ( err ) {
 			setNotice( {
 				status: 'error',
-				message:
-					err instanceof Error
-						? err.message
-						: __( 'Refresh failed.' ),
+				message: err instanceof Error ? err.message : __( 'Refresh failed.' ),
 			} );
 		} finally {
 			setIsBusy( false );
@@ -512,17 +621,13 @@ function AnthropicMaxConnectorCard( { slug, label, description, logo } ) {
 		setNotice( null );
 		try {
 			const results = await apiFetch( {
-				path: '/anthropic-max-pool/v1/health',
+				path: `${ REST_NS }/${ id }/health`,
 			} );
 			const ok = results.filter( ( r ) => r.validity === 'ok' ).length;
 			setNotice( {
 				status: ok === results.length ? 'success' : 'warning',
 				message:
-					ok +
-					'/' +
-					results.length +
-					' ' +
-					__( 'accounts healthy' ),
+					ok + '/' + results.length + ' ' + __( 'accounts healthy' ),
 			} );
 			await fetchAccounts();
 		} catch {
@@ -557,12 +662,8 @@ function AnthropicMaxConnectorCard( { slug, label, description, logo } ) {
 				<ConnectedBadge count={ accounts.length } />
 			) }
 			<Button
-				variant={
-					isExpanded || isConnected ? 'tertiary' : 'secondary'
-				}
-				size={
-					isExpanded || isConnected ? undefined : 'compact'
-				}
+				variant={ isExpanded || isConnected ? 'tertiary' : 'secondary' }
+				size={ isExpanded || isConnected ? undefined : 'compact' }
 				onClick={ handleButtonClick }
 				disabled={ isLoading }
 				aria-expanded={ isExpanded }
@@ -571,6 +672,8 @@ function AnthropicMaxConnectorCard( { slug, label, description, logo } ) {
 			</Button>
 		</HStack>
 	);
+
+	const AddForm = mode === 'manual-token' ? ManualTokenAddForm : OAuthAddForm;
 
 	const settingsPanel = isExpanded ? (
 		<VStack spacing={ 4 } className="connector-settings">
@@ -583,7 +686,6 @@ function AnthropicMaxConnectorCard( { slug, label, description, logo } ) {
 					{ notice.message }
 				</Notice>
 			) }
-
 			{ accounts.length > 0 && (
 				<VStack spacing={ 0 }>
 					{ accounts.map( ( account ) => (
@@ -593,21 +695,19 @@ function AnthropicMaxConnectorCard( { slug, label, description, logo } ) {
 							onRemove={ handleRemove }
 							onRefresh={ handleRefresh }
 							isBusy={ isBusy }
+							providerSupportsRefresh={ supportsRefresh }
 						/>
 					) ) }
 				</VStack>
 			) }
-
 			{ accounts.length === 0 && ! isAdding && (
 				<Text style={ { color: '#757575' } }>
-					{ __(
-						'No accounts configured. Add a Claude Max account to get started.'
-					) }
+					{ sprintf__( 'No %s accounts configured.', label ) }
 				</Text>
 			) }
-
 			{ isAdding ? (
-				<AddAccountForm
+				<AddForm
+					providerCfg={ providerCfg }
 					onComplete={ () => {
 						setIsAdding( false );
 						fetchAccounts();
@@ -640,8 +740,8 @@ function AnthropicMaxConnectorCard( { slug, label, description, logo } ) {
 
 	return (
 		<ConnectorItem
-			className="connector-item--ultimate-ai-connector-anthropic-max"
-			logo={ logo || <Logo /> }
+			className={ `connector-item--${ providerCfg.slug }` }
+			logo={ <ProviderLogo text={ iconText } /> }
 			name={ label }
 			description={ description }
 			actionArea={ actionArea }
@@ -651,38 +751,35 @@ function AnthropicMaxConnectorCard( { slug, label, description, logo } ) {
 	);
 }
 
-// Register the connector card.
-//
-// SLUG matches the PHP provider id from AnthropicMaxProvider::createProviderMetadata()
-// so the WP core Connectors page renders ONE card instead of two (the
-// auto-discovered server entry + a separately-keyed JS entry).
-const SLUG = 'ultimate-ai-connector-anthropic-max';
-const CONFIG = Object.freeze( {
-	label: __( 'Anthropic Max' ),
-	description: __(
-		'Use Claude with your Max subscription via OAuth. Supports account pool rotation for reliability.'
-	),
-	logo: <Logo />,
-	render: AnthropicMaxConnectorCard,
-} );
-
-// WP core's `routes/connectors-home/content` module runs
+// ---------------------------------------------------------------------------
+// Registration. WP core's `routes/connectors-home/content` module runs
 // `registerDefaultConnectors()` from inside an async dynamic import. By the
 // time it executes, our top-level registerConnector() has already populated
 // the store — and the store reducer spreads new config over existing
 // entries, so the default's `args.render = ApiKeyConnector` would overwrite
 // our custom render. The proper fix is in WordPress/gutenberg#77116; until
-// that ships we re-assert our registration on five ticks (sync + microtask
-// + setTimeout 0/50/250/1000ms) so our render always ends up last regardless
-// of dynamic-import resolution order. Re-registering with the same render
-// reference is idempotent so the redundant calls cost essentially nothing.
-function registerOurs() {
-	registerConnector( SLUG, CONFIG );
+// that ships we re-assert our registration on multiple ticks.
+// ---------------------------------------------------------------------------
+
+function registerProvider( providerCfg ) {
+	registerConnector(
+		providerCfg.slug,
+		Object.freeze( {
+			label: providerCfg.label,
+			description: providerCfg.description,
+			logo: <ProviderLogo text={ providerCfg.iconText } />,
+			render: () => <ProviderConnectorCard providerCfg={ providerCfg } />,
+		} )
+	);
 }
 
-registerOurs();
-Promise.resolve().then( registerOurs );
-setTimeout( registerOurs, 0 );
-setTimeout( registerOurs, 50 );
-setTimeout( registerOurs, 250 );
-setTimeout( registerOurs, 1000 );
+function registerAll() {
+	Object.values( PROVIDERS ).forEach( registerProvider );
+}
+
+registerAll();
+Promise.resolve().then( registerAll );
+setTimeout( registerAll, 0 );
+setTimeout( registerAll, 50 );
+setTimeout( registerAll, 250 );
+setTimeout( registerAll, 1000 );
