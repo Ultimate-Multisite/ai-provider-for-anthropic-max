@@ -29,17 +29,21 @@ const fail = (msg) => { console.error('[FAIL]', msg); process.exitCode = 1; };
   try {
     log('1. Login at', `${BASE}/wp-login.php`);
     await page.goto(`${BASE}/wp-login.php`, { waitUntil: 'domcontentloaded', timeout: 15000 });
-    await page.fill('#user_login', ADMIN_USER);
-    await page.fill('#user_pass', ADMIN_PASS);
-    await page.click('#wp-submit');
-    await page.waitForURL('**/wp-admin/**', { timeout: 15000 });
+    // Site uses Multisite Ultimate's custom login form (input name="log" / "pwd").
+    await page.fill('input[name="log"]', ADMIN_USER);
+    await page.fill('input[name="pwd"]', ADMIN_PASS);
+    await Promise.all([
+      page.waitForURL(/wp-admin/, { timeout: 20000 }),
+      page.click('button[type="submit"], input[type="submit"]'),
+    ]);
     log('   logged in:', page.url());
 
     log('2. Open Connectors page');
-    await page.goto(`${BASE}/wp-admin/options-general.php?page=connectors`, {
-      waitUntil: 'networkidle', timeout: 20000,
+    // Gutenberg registers the page with slug "options-connectors-wp-admin".
+    await page.goto(`${BASE}/wp-admin/options-general.php?page=options-connectors-wp-admin`, {
+      waitUntil: 'domcontentloaded', timeout: 30000,
     });
-    await page.waitForTimeout(1500); // let registerConnector ticks settle
+    await page.waitForTimeout(4000); // let React + registerConnector ticks settle
     await page.screenshot({ path: `${SHOTS}/multi-connectors-list.png` });
     log('   screenshot:', `${SHOTS}/multi-connectors-list.png`);
 
@@ -55,22 +59,35 @@ const fail = (msg) => { console.error('[FAIL]', msg); process.exitCode = 1; };
     if (Object.values(present).every(Boolean)) {
       log('4. Open each card to confirm forms render');
       for (const p of PROVIDERS) {
-        const card = page.locator(`text=${p.label}`).first();
-        const setupBtn = page.locator(`text=${p.label}`).locator('xpath=ancestor::*[self::article or self::section or self::div][1]').locator('button, a').filter({ hasText: /Set up|Manage|Add/i }).first();
+        // Find the row containing the provider label, then the "Set up" button at row-level.
+        const row = page.locator('tr, li, div').filter({ hasText: p.label }).filter({ has: page.locator('button, a').filter({ hasText: /Set up|Manage/i }) }).first();
+        const setupBtn = row.locator('button, a').filter({ hasText: /Set up|Manage/i }).first();
         try {
-          if (await setupBtn.count()) {
-            await setupBtn.click({ timeout: 3000 });
-            await page.waitForTimeout(800);
-            await page.screenshot({ path: `${SHOTS}/multi-card-${p.id}.png` });
-            log(`   ${p.id}: opened, screenshot saved`);
-            // close: press Escape or navigate back to list view
-            await page.keyboard.press('Escape').catch(() => {});
-            await page.waitForTimeout(300);
-          } else {
-            log(`   ${p.id}: no setup button found (may be already-active variant)`);
+          const c = await setupBtn.count();
+          if (!c) {
+            log(`   ${p.id}: no setup button found`);
+            continue;
           }
+          await setupBtn.click({ timeout: 5000 });
+          await page.waitForTimeout(1200);
+          await page.screenshot({ path: `${SHOTS}/multi-card-${p.id}.png` });
+
+          // Probe for expected fields
+          const txt = await page.locator('body').innerText();
+          const hasManual = txt.includes('access_token') || txt.includes('Access token') || txt.includes('Paste');
+          const hasOAuth = txt.includes('Authorize') || txt.includes('authorize') || txt.includes('OAuth') || txt.includes('paste');
+          log(`   ${p.id}: form opened, oauth=${hasOAuth} manual=${hasManual}`);
+
+          // Try to close via cancel/back button or escape
+          const cancelBtn = page.locator('button').filter({ hasText: /Cancel|Back|Close/i }).first();
+          if (await cancelBtn.count()) {
+            await cancelBtn.click({ timeout: 1500 }).catch(() => {});
+          } else {
+            await page.keyboard.press('Escape').catch(() => {});
+          }
+          await page.waitForTimeout(500);
         } catch (e) {
-          log(`   ${p.id}: click failed (${e.message.split('\n')[0]})`);
+          log(`   ${p.id}: click/probe failed (${String(e).split('\n')[0]})`);
         }
       }
     }
