@@ -5,3 +5,8 @@ node_modules/
 .agents/loop-state/
 
 .aidevops.json
+
+# Local-only smoke tests / dev scratch — never ship: contains personal
+# paths, hardcoded admin passwords, and developer-host URLs.
+/wp-*-test.mjs
+/wp-*-test.js
