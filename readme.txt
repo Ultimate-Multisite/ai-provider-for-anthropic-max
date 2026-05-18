@@ -17,8 +17,8 @@ This plugin extends the WordPress AI Client with **OAuth-based account pools** f
 **Supported providers:**
 
 * **Anthropic Max** -- OAuth (PKCE) flow with `claude.ai`. Pool with rotation, refresh, and cooldowns. Wired into the AI Client SDK as `ultimate-ai-connector-anthropic-max` (full text/image/tool support).
-* **OpenAI ChatGPT / Codex** -- OAuth flow with `auth.openai.com`. Paste the auth code from the localhost callback. Pool storage and rotation are implemented; SDK integration ships in a follow-up.
-* **Google AI Pro / Ultra / Workspace Gemini** -- OAuth OOB flow with `accounts.google.com`. Paste the code Google shows after authorization.
+* **OpenAI ChatGPT / Codex** -- OAuth flow with `auth.openai.com`. Paste the auth code from the localhost callback. Wired into the AI Client SDK as `ultimate-ai-connector-chatgpt-codex` (text generation + tool use).
+* **Google AI Pro / Ultra / Workspace Gemini** -- OAuth PKCE flow with `accounts.google.com`, using the Gemini CLI's published OAuth client. After signing in, paste the code shown on Google's `codeassist.google.com` landing page. Wired into the AI Client SDK as `ultimate-ai-connector-google-ai-pro` (text generation; Imagen image generation is out of scope for the OAuth bearer flow and remains in the canonical `ai-provider-for-google` plugin).
 
 **Pool features (all providers):**
 
@@ -37,7 +37,7 @@ This plugin extends the WordPress AI Client with **OAuth-based account pools** f
 
 1. Install and activate the plugin.
 2. Go to **Settings > Connectors**. You will see three cards: Anthropic Max, OpenAI ChatGPT/Codex, Google AI Pro.
-3. Click **Set up** on any card and authorize in a browser, then paste the returned code (OpenAI uses an in-page device code flow).
+3. Click **Set up** on any card and authorize in a browser, then paste the returned code (OpenAI uses an in-page device code flow; Google shows the code on `codeassist.google.com`).
 4. Add as many accounts per provider as you like for pool rotation.
 
 The plugin registers Anthropic Max as a separate provider (`ultimate-ai-connector-anthropic-max`) in the AI Client SDK and coexists with the standard API-key-based Anthropic provider.
@@ -71,6 +71,9 @@ OAuth tokens are stored in the WordPress options table. Only site administrators
 
 = Unreleased =
 
+* **FIX**: Google AI Pro OAuth flow was completely broken in 1.2.0. The configured OAuth client id (`681255809395-oo8ft6t5t0rnmhfqgpnkqtev5b9a2i5j.apps.googleusercontent.com`) did not exist — Google returned `invalid_client: The OAuth client was not found.` Replaced with the live Gemini CLI Code Assist client id (`oo8ft2oprdrnp9e3aqf6av3hmdib135j`), added the matching `client_secret` (public per Google's installed-app spec — embedded in the open-source Gemini CLI), swapped the discontinued OOB redirect (`urn:ietf:wg:oauth:2.0:oob`, deprecated by Google 2022-10-03) for the Gemini CLI's `https://codeassist.google.com/authcode` paste-code landing page, switched the scopes to the exact set used by Gemini CLI (`cloud-platform`, `userinfo.email`, `userinfo.profile`), switched the token endpoint content type to `application/x-www-form-urlencoded` (Google rejects JSON bodies), and replaced the API-key health-check endpoint with `https://www.googleapis.com/oauth2/v2/userinfo` (works with OAuth bearer tokens).
+* **NEW**: Google AI Pro is now wired into the AI Client SDK as `ultimate-ai-connector-google-ai-pro` (text generation, function calling, web search). The new `GoogleAiProProvider`, `GoogleOAuthRequestAuthentication`, `GoogleAiProModelMetadataDirectory`, and `GoogleAiProTextGenerationModel` classes mirror the patterns in the canonical WordPress.org `ai-provider-for-google` plugin so request/response shapes are identical; only the auth header swaps from `X-Goog-Api-Key` to `Authorization: Bearer`. Imagen image generation is intentionally out of scope here — OAuth bearer with the `cloud-platform` scope does not currently expose Imagen through `generativelanguage.googleapis.com`, so the canonical `ai-provider-for-google` plugin remains the recommended path for API-key-billed Imagen usage.
+* **NEW**: `ProviderConfig::$clientSecret` field for OAuth client types that require a secret on token exchange (Google). Anthropic and OpenAI use PKCE-only and leave it empty. Wired through `ProviderPool::exchangeCode()` and `refreshTokens()` so the secret is sent when present.
 * **REMOVED**: Cursor Pro provider. The `cursor` provider entry, its Connectors card, the `manual-token` add form, and the `/anthropic-max-pool/v1/{provider}/manual` REST route have all been removed. Anthropic Max, OpenAI ChatGPT/Codex, and Google AI Pro remain. If any sites stored data under the `anthropic_max_oauth_pool_cursor` option key it is no longer read and can be deleted manually.
 
 = 1.2.0 =

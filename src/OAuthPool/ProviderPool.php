@@ -586,6 +586,12 @@ class ProviderPool
             'redirect_uri'  => $this->config->redirectUri,
             'code_verifier' => $verifier,
         ];
+        // Google's OAuth client type requires `client_secret` on token
+        // exchange even though the secret is embedded in the Gemini CLI
+        // source. Anthropic and OpenAI use PKCE-only and omit it.
+        if ($this->config->clientSecret !== '') {
+            $body_params['client_secret'] = $this->config->clientSecret;
+        }
         if ($this->config->id === 'anthropic') {
             $body_params['state'] = $state;
         }
@@ -977,11 +983,16 @@ class ProviderPool
             return null;
         }
 
-        $body = $this->buildTokenRequestBody([
+        $refresh_params = [
             'grant_type'    => 'refresh_token',
             'refresh_token' => $refresh_token,
             'client_id'     => $this->config->clientId,
-        ]);
+        ];
+        // Google requires `client_secret` on refresh as well as exchange.
+        if ($this->config->clientSecret !== '') {
+            $refresh_params['client_secret'] = $this->config->clientSecret;
+        }
+        $body = $this->buildTokenRequestBody($refresh_params);
 
         $response = wp_remote_post(
             $this->config->tokenEndpoint,

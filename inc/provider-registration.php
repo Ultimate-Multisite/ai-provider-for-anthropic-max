@@ -19,10 +19,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 use WordPress\AiClient\AiClient;
 use AnthropicMaxAiProvider\Authentication\AnthropicOAuthRequestAuthentication;
 use AnthropicMaxAiProvider\Authentication\ChatGptCodexOAuthRequestAuthentication;
+use AnthropicMaxAiProvider\Authentication\GoogleOAuthRequestAuthentication;
 use AnthropicMaxAiProvider\OAuthPool\PoolManager;
 use AnthropicMaxAiProvider\OAuthPool\PoolRegistry;
 use AnthropicMaxAiProvider\Provider\AnthropicMaxProvider;
 use AnthropicMaxAiProvider\Provider\ChatGptCodexProvider;
+use AnthropicMaxAiProvider\Provider\GoogleAiProProvider;
 
 /**
  * Registers all available OAuth-backed AI providers with the AI Client on init.
@@ -64,6 +66,24 @@ function register_provider(): void {
 		$registry->setProviderRequestAuthentication(
 			ChatGptCodexProvider::class,
 			new ChatGptCodexOAuthRequestAuthentication( $openai_pool )
+		);
+	}
+
+	// --- Google AI Pro (Gemini via OAuth subscription, not API key) ---
+	// Distinct provider id (`ultimate-ai-connector-google-ai-pro`) to avoid
+	// collision with the canonical `ai-provider-for-google` plugin that
+	// targets the API-key auth path. The endpoint base URL is the same
+	// (`generativelanguage.googleapis.com/v1beta`) so request/response
+	// shapes mirror the canonical plugin; only the auth header differs
+	// (Bearer vs X-Goog-Api-Key).
+	$google_pool = PoolRegistry::pool( 'google' );
+	if ( $google_pool->count() > 0
+		&& ! $registry->hasProvider( GoogleAiProProvider::class )
+	) {
+		$registry->registerProvider( GoogleAiProProvider::class );
+		$registry->setProviderRequestAuthentication(
+			GoogleAiProProvider::class,
+			new GoogleOAuthRequestAuthentication( $google_pool )
 		);
 	}
 }
