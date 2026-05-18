@@ -3,7 +3,7 @@
  * Generic per-provider OAuth account pool.
  *
  * Stores, rotates, and manages a pool of OAuth accounts for one provider
- * (Anthropic Max, OpenAI ChatGPT/Codex, Cursor Pro, or Google AI Pro).
+ * (Anthropic Max, OpenAI ChatGPT/Codex, or Google AI Pro).
  * Each provider has its own pool, isolated by a per-provider option key.
  *
  * Mirrors the design of aidevops's `oauth-pool-helper.sh` but implemented
@@ -224,7 +224,7 @@ class ProviderPool
      *
      * Same selection/refresh semantics as {@see self::getActiveTokenWithEmail()};
      * extends the return shape with `accountId` so consumers that need an
-     * extra request header (Codex backend, Cursor, etc.) don't have to make
+     * extra request header (e.g. the Codex backend) don't have to make
      * a second pool query or re-decode the JWT.
      *
      * @return array{token: string, email: string, accountId: string|null}|null
@@ -693,42 +693,6 @@ class ProviderPool
         );
 
         return $result;
-    }
-
-    /**
-     * Adds an account by direct token paste (used for Cursor and as
-     * a manual fallback for any provider).
-     *
-     * Email may be derived from the JWT 'sub' claim if empty.
-     *
-     * @param string      $email
-     * @param string      $access_token
-     * @param string      $refresh_token
-     * @param int|null    $expires_in    Seconds until expiry. Null → derive from JWT exp or use 3600.
-     * @return array{email:string,count:int}
-     */
-    public function addAccountManual(
-        string $email,
-        string $access_token,
-        string $refresh_token = '',
-        ?int $expires_in = null
-    ): array {
-        $jwt = $this->decodeJwtPayload($access_token);
-
-        if ($email === '' || strpos($email, '@') === false) {
-            $email = (string) ($jwt['email'] ?? $jwt['preferred_username'] ?? $jwt['sub'] ?? 'unknown');
-        }
-
-        if ($expires_in === null) {
-            if (isset($jwt['exp']) && is_int($jwt['exp']) && $jwt['exp'] > time()) {
-                $expires_in = $jwt['exp'] - time();
-            } else {
-                $expires_in = 3600;
-            }
-        }
-
-        $count = $this->addAccount($email, $access_token, $refresh_token, $expires_in);
-        return ['email' => $email, 'count' => $count];
     }
 
     /**

@@ -5,8 +5,7 @@
  * subscription plan provider:
  *
  *   - Anthropic Max         (OAuth PKCE + paste-code)
- *   - OpenAI ChatGPT/Codex  (OAuth PKCE + paste-code from localhost callback)
- *   - Cursor Pro            (manual token paste — Cursor has no public OAuth)
+ *   - OpenAI ChatGPT/Codex  (OAuth device-code flow)
  *   - Google AI Pro         (OAuth PKCE OOB + paste-code)
  *
  * Each card uses the same generic add/list/remove/refresh UI, configured
@@ -24,7 +23,6 @@ const { createElement, useState, useEffect, useCallback, Fragment } = wp.element
 const {
 	Button,
 	TextControl,
-	TextareaControl,
 	Spinner,
 	Notice,
 	__experimentalHStack: HStack,
@@ -140,20 +138,6 @@ const PROVIDERS = {
 		),
 		mode: 'device-code',
 		iconText: 'GPT',
-	},
-	cursor: {
-		id: 'cursor',
-		slug: 'ultimate-ai-connector-cursor-pro',
-		label: __( 'Cursor Pro' ),
-		description: __(
-			'Use Cursor Pro tokens. Cursor has no public OAuth — paste your access/refresh tokens from the IDE.'
-		),
-		mode: 'manual-token',
-		emailRequired: false,
-		instructions: __(
-			'Find your tokens in Cursor IDE: ~/.cursor/auth.json (Linux/macOS) or %APPDATA%/Cursor/auth.json (Windows). Email is auto-derived from the token.'
-		),
-		iconText: 'CUR',
 	},
 	google: {
 		id: 'google',
@@ -546,108 +530,6 @@ function OAuthAddForm( { providerCfg, onComplete, onCancel } ) {
 }
 
 // ---------------------------------------------------------------------------
-// Manual-token add form (cursor, or any provider as fallback).
-// ---------------------------------------------------------------------------
-
-function ManualTokenAddForm( { providerCfg, onComplete, onCancel } ) {
-	const { id, label, instructions } = providerCfg;
-	const [ accessToken, setAccessToken ] = useState( '' );
-	const [ refreshToken, setRefreshToken ] = useState( '' );
-	const [ email, setEmail ] = useState( '' );
-	const [ isBusy, setIsBusy ] = useState( false );
-	const [ inlineError, setInlineError ] = useState( '' );
-
-	const handleSubmit = async () => {
-		if ( ! accessToken.trim() ) {
-			setInlineError( __( 'Paste the access token.' ) );
-			return;
-		}
-		setInlineError( '' );
-		setIsBusy( true );
-		try {
-			await apiFetch( {
-				method: 'POST',
-				path: `${ REST_NS }/${ id }/manual`,
-				data: {
-					access_token: accessToken.trim(),
-					refresh_token: refreshToken.trim(),
-					email: email.trim(),
-				},
-			} );
-			const { createSuccessNotice } = resolveNoticeDispatchers();
-			createSuccessNotice(
-				sprintf__( '%s account connected.', label ),
-				{ ...SNACKBAR_OPTS, id: `${ id }-add-success` }
-			);
-			onComplete();
-		} catch ( err ) {
-			setInlineError( apiFetchErrorMessage( err, __( 'Failed to add account.' ) ) );
-		} finally {
-			setIsBusy( false );
-		}
-	};
-
-	const instructionsText =
-		typeof instructions === 'string' ? instructions : '';
-
-	return (
-		<VStack spacing={ 3 } style={ { marginTop: '12px' } }>
-			{ inlineError && (
-				<InlineErrorBanner message={ inlineError } />
-			) }
-			<Notice
-				status="info"
-				isDismissible={ false }
-				politeness="polite"
-				spokenMessage={ instructionsText }
-			>
-				{ instructionsText }
-			</Notice>
-			<TextareaControl
-				__nextHasNoMarginBottom
-				label={ __( 'Access Token' ) }
-				value={ accessToken }
-				onChange={ setAccessToken }
-				rows={ 3 }
-				disabled={ isBusy }
-			/>
-			<TextareaControl
-				__nextHasNoMarginBottom
-				label={ __( 'Refresh Token (optional)' ) }
-				value={ refreshToken }
-				onChange={ setRefreshToken }
-				rows={ 3 }
-				disabled={ isBusy }
-			/>
-			<TextControl
-				__nextHasNoMarginBottom
-				__next40pxDefaultSize
-				label={ __( 'Email (optional — auto-derived from the token if blank)' ) }
-				type="email"
-				value={ email }
-				onChange={ setEmail }
-				placeholder="you@example.com"
-				disabled={ isBusy }
-			/>
-			<HStack spacing={ 2 }>
-				<Button
-					__next40pxDefaultSize
-					variant="primary"
-					onClick={ handleSubmit }
-					disabled={ isBusy || ! accessToken }
-					isBusy={ isBusy }
-				>
-					{ sprintf__( 'Add %s Account', label ) }
-				</Button>
-				<Button variant="tertiary" onClick={ onCancel }>
-					{ __( 'Cancel' ) }
-				</Button>
-			</HStack>
-		</VStack>
-	);
-}
-
-// ---------------------------------------------------------------------------
 // Device-code add form (OpenAI — no localhost binding needed).
 // ---------------------------------------------------------------------------
 
@@ -927,7 +809,7 @@ function ProviderConnectorCard( { providerCfg } ) {
 	const [ isBusy, setIsBusy ] = useState( false );
 
 	const isConnected = accounts.length > 0;
-	const supportsRefresh = mode === 'oauth-paste' || mode === 'device-code'; // Manual-token providers can't refresh.
+	const supportsRefresh = mode === 'oauth-paste' || mode === 'device-code';
 
 	const fetchAccounts = useCallback( async () => {
 		try {
@@ -1060,10 +942,7 @@ function ProviderConnectorCard( { providerCfg } ) {
 		</HStack>
 	);
 
-	const AddForm =
-		mode === 'manual-token' ? ManualTokenAddForm :
-		mode === 'device-code'  ? DeviceCodeForm :
-		OAuthAddForm;
+	const AddForm = mode === 'device-code' ? DeviceCodeForm : OAuthAddForm;
 
 	const settingsPanel = isExpanded ? (
 		<VStack spacing={ 4 } className="connector-settings">

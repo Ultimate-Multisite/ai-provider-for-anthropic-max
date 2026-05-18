@@ -4,7 +4,7 @@
  *
  * Encapsulates all the protocol-level parameters that differ between
  * supported subscription providers (Anthropic Max, OpenAI ChatGPT/Codex,
- * Cursor Pro, Google AI Pro): client id, endpoints, scopes, redirect URI,
+ * Google AI Pro): client id, endpoints, scopes, redirect URI,
  * user-agent, content type, and pool option key.
  *
  * Mirrors the per-provider sections of aidevops's `oauth-pool-helper.sh`
@@ -28,7 +28,7 @@ namespace AnthropicMaxAiProvider\OAuthPool;
 final class ProviderConfig
 {
     /**
-     * Provider identifier slug ('anthropic'|'openai'|'cursor'|'google').
+     * Provider identifier slug ('anthropic'|'openai'|'google').
      */
     public string $id;
 
@@ -101,8 +101,11 @@ final class ProviderConfig
     public array $healthCheckHeaders;
 
     /**
-     * Whether the provider supports OAuth at all (false for cursor — it
-     * uses local IDE credentials instead).
+     * Whether the provider supports OAuth at all.
+     *
+     * All currently-supported providers use OAuth. Retained as a defensive
+     * capability flag so the REST layer and ProviderPool can short-circuit
+     * cleanly if a non-OAuth provider is added later.
      */
     public bool $supportsOAuth;
 
@@ -177,7 +180,7 @@ final class ProviderConfig
     /**
      * Returns the configuration for a given provider id.
      *
-     * @param string $id One of 'anthropic'|'openai'|'cursor'|'google'.
+     * @param string $id One of 'anthropic'|'openai'|'google'.
      * @return self
      * @throws \InvalidArgumentException If the provider id is unknown.
      */
@@ -271,29 +274,6 @@ final class ProviderConfig
             'deviceCodeUrl'      => 'https://auth.openai.com/api/accounts/deviceauth/usercode',
             'deviceTokenUrl'     => 'https://auth.openai.com/api/accounts/deviceauth/token',
             'deviceCallbackUri'  => 'https://auth.openai.com/deviceauth/callback',
-        ]);
-
-        // -----------------------------------------------------------------
-        // Cursor Pro
-        // -----------------------------------------------------------------
-        // Cursor has no public OAuth client — credentials live in the
-        // user's Cursor IDE. Users paste their access/refresh tokens
-        // directly. We store the tokens; rotation works the same way.
-        $cache['cursor'] = new self([
-            'id'                => 'cursor',
-            'label'             => 'Cursor Pro',
-            'optionKey'         => 'anthropic_max_oauth_pool_cursor',
-            'clientId'          => '',
-            'authorizeUrl'      => '',
-            'tokenEndpoint'     => '',
-            'redirectUri'       => '',
-            'scopes'            => '',
-            'tokenContentType'  => 'application/json',
-            'userAgent'         => 'cursor-plugin/1.2.0',
-            'requiredScope'     => '',
-            'healthCheckUrl'    => '',
-            'supportsOAuth'     => false,
-            'description'       => 'Use Cursor Pro tokens (paste from your Cursor IDE auth.json or the IDE settings).',
         ]);
 
         // -----------------------------------------------------------------

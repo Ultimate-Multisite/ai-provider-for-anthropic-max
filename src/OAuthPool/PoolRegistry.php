@@ -3,7 +3,7 @@
  * Registry for per-provider OAuth pools.
  *
  * Returns memoised `ProviderPool` instances for each supported provider id
- * (anthropic, openai, cursor, google). Acts as the single entry point used
+ * (anthropic, openai, google). Acts as the single entry point used
  * by the REST API and provider integration layer.
  *
  * @since 1.2.0
@@ -32,7 +32,7 @@ class PoolRegistry
     /**
      * Returns the pool for the given provider id.
      *
-     * @param string $id One of 'anthropic'|'openai'|'cursor'|'google'.
+     * @param string $id One of 'anthropic'|'openai'|'google'.
      * @return ProviderPool
      * @throws \InvalidArgumentException If the provider id is unknown.
      */
