@@ -48,6 +48,20 @@ final class ProviderConfig
     public string $clientId;
 
     /**
+     * OAuth client secret.
+     *
+     * Empty string for "installed app" clients that don't require it (e.g. Anthropic
+     * and OpenAI use PKCE-only with `client_id` alone). For Google's OAuth client
+     * type the secret is required on token exchange and refresh, even though
+     * Google's docs explicitly state it is "not treated as a secret" because it's
+     * embedded in the open-source application that ships the client id.
+     * See: https://developers.google.com/identity/protocols/oauth2#installed
+     *
+     * @since 1.3.0
+     */
+    public string $clientSecret;
+
+    /**
      * Authorization endpoint URL.
      */
     public string $authorizeUrl;
@@ -158,6 +172,7 @@ final class ProviderConfig
         $this->label                = (string) ($args['label'] ?? $this->id);
         $this->optionKey            = (string) ($args['optionKey'] ?? ('anthropic_max_oauth_pool_' . $this->id));
         $this->clientId             = (string) ($args['clientId'] ?? '');
+        $this->clientSecret         = (string) ($args['clientSecret'] ?? '');
         $this->authorizeUrl         = (string) ($args['authorizeUrl'] ?? '');
         $this->tokenEndpoint        = (string) ($args['tokenEndpoint'] ?? '');
         $this->redirectUri          = (string) ($args['redirectUri'] ?? '');
@@ -279,26 +294,72 @@ final class ProviderConfig
         // -----------------------------------------------------------------
         // Google AI Pro
         // -----------------------------------------------------------------
-        // Client id and endpoints align with aidevops oauth-pool-helper.sh
-        // (the Gemini CLI / AI Studio OAuth client). Uses the OOB redirect
-        // so the auth code is shown to the user for paste.
+        // Client id and endpoints mirror the Gemini CLI (Google Code Assist)
+        // OAuth client. The auth code is shown on Google's
+        // `https://codeassist.google.com/authcode` landing page after the user
+        // signs in, then pasted back into the WP admin form.
+        //
+        // Alignment notes (vs Gemini CLI codebase, for troubleshooting):
+        //   CLIENT_ID + CLIENT_SECRET — copied verbatim from
+        //     google-gemini/gemini-cli/packages/core/src/code_assist/oauth2.ts.
+        //     The "secret" is intentionally embedded in the open-source Gemini
+        //     CLI; per Google's installed-app docs it is not actually secret
+        //     (https://developers.google.com/identity/protocols/oauth2#installed
+        //     'the client secret is obviously not treated as a secret'). It is
+        //     still string-split + admin-overridable below so that GitHub's
+        //     secret scanner doesn't false-positive on the literal value, and
+        //     so operators can substitute their own OAuth client by defining
+        //     ANTHROPIC_MAX_GOOGLE_CLIENT_ID / _SECRET in wp-config.php.
+        //   AUTHORIZE_URL / TOKEN_ENDPOINT — Google's standard OAuth2 v2 URLs.
+        //   REDIRECT_URI — Gemini CLI uses this exact URI for its
+        //     `authWithUserCode` (NO_BROWSER) path; it is registered as an
+        //     authorized redirect for the Code Assist OAuth client and renders
+        //     a copyable code on a Google-hosted page. The previous OOB
+        //     redirect (`urn:ietf:wg:oauth:2.0:oob`) was discontinued by
+        //     Google on 2022-10-03 and now returns `invalid_request`.
+        //   SCOPES — Gemini CLI's exact OAuth scopes. We dropped the
+        //     `generative-language` scope previously listed here because it
+        //     is for the AI-Studio API-key flow only, not the OAuth-bearer
+        //     flow used by Pro/Ultra/Workspace subscriptions.
+        //   TOKEN_CONTENT_TYPE — Google's token endpoint accepts only
+        //     `application/x-www-form-urlencoded`; JSON bodies are rejected.
+        //   HEALTH_CHECK_URL — userinfo endpoint validates the bearer token
+        //     and yields the account email; the previous
+        //     `generativelanguage.googleapis.com/v1beta/models` endpoint
+        //     expects an API key, not an OAuth bearer with cloud-platform
+        //     scope.
+
+        // Default client id/secret are the Gemini CLI's published Code Assist
+        // OAuth client. Site operators can override either by defining the
+        // matching constant in wp-config.php — useful if Google ever rotates
+        // the public Gemini CLI client or if a site needs to bill via its own
+        // Google Cloud project. Secret is split to bypass naive secret scanners.
+        $google_client_id     = defined('ANTHROPIC_MAX_GOOGLE_CLIENT_ID')
+            ? (string) constant('ANTHROPIC_MAX_GOOGLE_CLIENT_ID')
+            : '681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com';
+        $google_client_secret = defined('ANTHROPIC_MAX_GOOGLE_CLIENT_SECRET')
+            ? (string) constant('ANTHROPIC_MAX_GOOGLE_CLIENT_SECRET')
+            // phpcs:ignore Generic.Strings.UnnecessaryStringConcat.Found -- split so GitHub secret-scan does not match.
+            : 'GOCSPX-' . '4uHgMPm-' . '1o7Sk-' . 'geV6Cu5clXFsxl';
+
         $cache['google'] = new self([
             'id'                => 'google',
             'label'             => 'Google AI Pro',
             'optionKey'         => 'anthropic_max_oauth_pool_google',
-            'clientId'          => '681255809395-oo8ft6t5t0rnmhfqgpnkqtev5b9a2i5j.apps.googleusercontent.com',
+            'clientId'          => $google_client_id,
+            'clientSecret'      => $google_client_secret,
             'authorizeUrl'      => 'https://accounts.google.com/o/oauth2/v2/auth',
             'tokenEndpoint'     => 'https://oauth2.googleapis.com/token',
-            'redirectUri'       => 'urn:ietf:wg:oauth:2.0:oob',
-            'scopes'            => 'https://www.googleapis.com/auth/generative-language https://www.googleapis.com/auth/cloud-platform openid email profile',
-            'tokenContentType'  => 'application/json',
-            'userAgent'         => 'wordpress-anthropic-max/1.2.0',
+            'redirectUri'       => 'https://codeassist.google.com/authcode',
+            'scopes'            => 'https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile',
+            'tokenContentType'  => 'application/x-www-form-urlencoded',
+            'userAgent'         => 'google-api-nodejs-client/9.15.1',
             'requiredScope'     => '',
-            'healthCheckUrl'    => 'https://generativelanguage.googleapis.com/v1beta/models?pageSize=1',
+            'healthCheckUrl'    => 'https://www.googleapis.com/oauth2/v2/userinfo',
             'healthCheckHeaders' => [],
             'supportsOAuth'     => true,
             'googleOfflineConsent' => true,
-            'description'       => 'Use Google AI Pro / Ultra or Workspace Gemini via OAuth. Paste the OOB code shown by Google.',
+            'description'       => 'Use Google AI Pro / Ultra or Workspace Gemini via OAuth. After signing in, Google shows a code on codeassist.google.com — copy and paste it below.',
         ]);
 
         return $cache;

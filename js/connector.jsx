@@ -6,7 +6,7 @@
  *
  *   - Anthropic Max         (OAuth PKCE + paste-code)
  *   - OpenAI ChatGPT/Codex  (OAuth device-code flow)
- *   - Google AI Pro         (OAuth PKCE OOB + paste-code)
+ *   - Google AI Pro         (OAuth PKCE + Code Assist landing page paste-code)
  *
  * Each card uses the same generic add/list/remove/refresh UI, configured
  * by a per-provider config object (mode, label, icon, REST namespace).
@@ -144,12 +144,12 @@ const PROVIDERS = {
 		slug: 'ultimate-ai-connector-google-ai-pro',
 		label: __( 'Google AI Pro' ),
 		description: __(
-			'Use Google AI Pro/Ultra or Workspace Gemini via OAuth. Paste the OOB code shown by Google.'
+			'Use Google AI Pro/Ultra or Workspace Gemini via OAuth. Paste the code Google shows after authorization.'
 		),
 		mode: 'oauth-paste',
 		emailRequired: true,
 		instructions: __(
-			'After signing in, Google shows a code in the browser. Copy and paste it below.'
+			'After signing in, Google shows a code on the codeassist.google.com landing page. Copy and paste it below.'
 		),
 		iconText: 'GAI',
 	},
