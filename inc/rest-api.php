@@ -4,7 +4,7 @@
  *
  * Provides endpoints for listing, adding, removing, refreshing, and
  * health-checking OAuth accounts across all supported providers
- * (anthropic, openai, cursor, google).
+ * (anthropic, openai, google).
  *
  * Two route shapes are exposed:
  *
@@ -13,7 +13,6 @@
  *        /anthropic-max-pool/v1/{provider}/accounts
  *        /anthropic-max-pool/v1/{provider}/authorize
  *        /anthropic-max-pool/v1/{provider}/exchange
- *        /anthropic-max-pool/v1/{provider}/manual
  *        /anthropic-max-pool/v1/{provider}/accounts/remove
  *        /anthropic-max-pool/v1/{provider}/accounts/refresh
  *        /anthropic-max-pool/v1/{provider}/health
@@ -134,41 +133,6 @@ function register_routes(): void {
 						'required'          => true,
 						'type'              => 'string',
 						'sanitize_callback' => 'sanitize_email',
-					],
-				]
-			),
-		]
-	);
-
-	register_rest_route(
-		$namespace,
-		'/(?P<provider>[a-z0-9_-]+)/manual',
-		[
-			'methods'             => 'POST',
-			'callback'            => __NAMESPACE__ . '\\rest_add_manual',
-			'permission_callback' => __NAMESPACE__ . '\\can_manage',
-			'args'                => array_merge(
-				$provider_arg,
-				[
-					'access_token'  => [
-						'required'          => true,
-						'type'              => 'string',
-						'sanitize_callback' => 'sanitize_text_field',
-					],
-					'refresh_token' => [
-						'required'          => false,
-						'type'              => 'string',
-						'sanitize_callback' => 'sanitize_text_field',
-					],
-					'email'         => [
-						'required'          => false,
-						'type'              => 'string',
-						'sanitize_callback' => 'sanitize_text_field',
-					],
-					'expires_in'    => [
-						'required'          => false,
-						'type'              => 'integer',
-						'sanitize_callback' => 'absint',
 					],
 				]
 			),
@@ -451,8 +415,9 @@ function rest_list_accounts( \WP_REST_Request $request ) {
 /**
  * Starts the OAuth PKCE flow for the requested provider.
  *
- * Returns an authorize URL, state token, and redirect URI. Rejects providers
- * that do not support OAuth (e.g. Cursor Pro) with a 400 error.
+ * Returns an authorize URL, state token, and redirect URI. Returns a 400
+ * error if the resolved provider does not support OAuth — kept as a
+ * defensive guard even though all currently-supported providers are OAuth.
  *
  * @param \WP_REST_Request $request REST request; `login_hint` and `login_method` are optional body params.
  * @return \WP_REST_Response|\WP_Error Auth URL data on success, WP_Error on unsupported provider or failure.
@@ -550,51 +515,6 @@ function rest_exchange_code( \WP_REST_Request $request ) {
 			$pool->getConfig()->label
 		),
 		'count'   => $pool->count(),
-	] );
-}
-
-/**
- * Adds an account to a pool using a manually pasted access token (and optional refresh token).
- *
- * Intended for providers without a public OAuth client (e.g. Cursor Pro). The email
- * address may be derived automatically from a JWT `sub` claim when not supplied.
- *
- * @param \WP_REST_Request $request Body params: access_token (string, required), refresh_token (string),
- *                                  email (string), expires_in (int).
- * @return \WP_REST_Response|\WP_Error Success response with email and count, or WP_Error on missing token.
- */
-function rest_add_manual( \WP_REST_Request $request ) {
-	$pool = resolve_pool( $request );
-	if ( $pool instanceof \WP_Error ) {
-		return $pool;
-	}
-
-	$access  = (string) $request->get_param( 'access_token' );
-	$refresh = (string) ( $request->get_param( 'refresh_token' ) ?? '' );
-	$email   = (string) ( $request->get_param( 'email' ) ?? '' );
-	$exp     = $request->get_param( 'expires_in' );
-	$exp_in  = is_numeric( $exp ) ? (int) $exp : null;
-
-	if ( $access === '' ) {
-		return new \WP_Error(
-			'missing_params',
-			__( 'access_token is required.', 'ai-provider-for-anthropic-max' ),
-			[ 'status' => 400 ]
-		);
-	}
-
-	$res = $pool->addAccountManual( $email, $access, $refresh, $exp_in );
-
-	return rest_ensure_response( [
-		'success' => true,
-		'message' => sprintf(
-			/* translators: 1: email, 2: provider label */
-			__( 'Account %1$s added to %2$s pool.', 'ai-provider-for-anthropic-max' ),
-			$res['email'],
-			$pool->getConfig()->label
-		),
-		'email'   => $res['email'],
-		'count'   => $res['count'],
 	] );
 }
 

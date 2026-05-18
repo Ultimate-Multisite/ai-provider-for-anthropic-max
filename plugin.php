@@ -2,7 +2,7 @@
 /**
  * Plugin Name: AI Provider for Anthropic Max
  * Plugin URI: https://github.com/Ultimate-Multisite/ai-provider-for-anthropic-max
- * Description: Multi-provider OAuth account pool for the WordPress AI Client. Supports Anthropic Claude Max, OpenAI ChatGPT/Codex, Cursor Pro, and Google AI Pro plans with rotation, refresh, and rate-limit handling.
+ * Description: Multi-provider OAuth account pool for the WordPress AI Client. Supports Anthropic Claude Max, OpenAI ChatGPT/Codex, and Google AI Pro plans with rotation, refresh, and rate-limit handling.
  * Requires at least: 6.9
  * Requires PHP: 7.4
  * Version: 1.2.0

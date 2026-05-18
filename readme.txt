@@ -8,17 +8,16 @@ Requires PHP: 7.4
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Multi-provider OAuth account pool for the WordPress AI Client. Anthropic Max, OpenAI ChatGPT/Codex, Cursor Pro, and Google AI Pro.
+Multi-provider OAuth account pool for the WordPress AI Client. Anthropic Max, OpenAI ChatGPT/Codex, and Google AI Pro.
 
 == Description ==
 
-This plugin extends the WordPress AI Client with **OAuth-based account pools** for paid AI subscriptions, so you can use your existing **Anthropic Claude Max**, **OpenAI ChatGPT/Codex**, **Cursor Pro**, or **Google AI Pro** plan from WordPress without per-token API billing.
+This plugin extends the WordPress AI Client with **OAuth-based account pools** for paid AI subscriptions, so you can use your existing **Anthropic Claude Max**, **OpenAI ChatGPT/Codex**, or **Google AI Pro** plan from WordPress without per-token API billing.
 
 **Supported providers:**
 
 * **Anthropic Max** -- OAuth (PKCE) flow with `claude.ai`. Pool with rotation, refresh, and cooldowns. Wired into the AI Client SDK as `ultimate-ai-connector-anthropic-max` (full text/image/tool support).
 * **OpenAI ChatGPT / Codex** -- OAuth flow with `auth.openai.com`. Paste the auth code from the localhost callback. Pool storage and rotation are implemented; SDK integration ships in a follow-up.
-* **Cursor Pro** -- Manual token paste (Cursor has no public OAuth client). Tokens are stored as a pool with email auto-derived from the JWT `sub` claim.
 * **Google AI Pro / Ultra / Workspace Gemini** -- OAuth OOB flow with `accounts.google.com`. Paste the code Google shows after authorization.
 
 **Pool features (all providers):**
@@ -27,7 +26,7 @@ This plugin extends the WordPress AI Client with **OAuth-based account pools** f
 * **Auto-refresh** -- Expired tokens are refreshed automatically when refresh tokens are available.
 * **Rate-limit cooldowns** -- Rate-limited accounts rotate out and re-enter the pool after a configurable cooldown.
 * **Health checks** -- Per-provider `/health` endpoint reports account status.
-* **Connectors page** -- Manage all four providers from `Settings > Connectors` with one card each.
+* **Connectors page** -- Manage all three providers from `Settings > Connectors` with one card each.
 
 **Requirements by WordPress version:**
 
@@ -37,10 +36,8 @@ This plugin extends the WordPress AI Client with **OAuth-based account pools** f
 **How it works:**
 
 1. Install and activate the plugin.
-2. Go to **Settings > Connectors**. You will see four cards: Anthropic Max, OpenAI ChatGPT/Codex, Cursor Pro, Google AI Pro.
-3. Click **Set up** on any card and follow the provider-specific flow:
-   * Anthropic / OpenAI / Google: authorize in a browser, paste the returned code.
-   * Cursor: paste your access token (and optional refresh token) from the Cursor IDE.
+2. Go to **Settings > Connectors**. You will see three cards: Anthropic Max, OpenAI ChatGPT/Codex, Google AI Pro.
+3. Click **Set up** on any card and authorize in a browser, then paste the returned code (OpenAI uses an in-page device code flow).
 4. Add as many accounts per provider as you like for pool rotation.
 
 The plugin registers Anthropic Max as a separate provider (`ultimate-ai-connector-anthropic-max`) in the AI Client SDK and coexists with the standard API-key-based Anthropic provider.
@@ -72,15 +69,19 @@ OAuth tokens are stored in the WordPress options table. Only site administrators
 
 == Changelog ==
 
+= Unreleased =
+
+* **REMOVED**: Cursor Pro provider. The `cursor` provider entry, its Connectors card, the `manual-token` add form, and the `/anthropic-max-pool/v1/{provider}/manual` REST route have all been removed. Anthropic Max, OpenAI ChatGPT/Codex, and Google AI Pro remain. If any sites stored data under the `anthropic_max_oauth_pool_cursor` option key it is no longer read and can be deleted manually.
+
 = 1.2.0 =
 
-* **NEW**: multi-provider OAuth pool support. Adds OpenAI ChatGPT/Codex, Cursor Pro, and Google AI Pro alongside Anthropic Max.
+* **NEW**: multi-provider OAuth pool support. Adds OpenAI ChatGPT/Codex and Google AI Pro alongside Anthropic Max.
 * Transient success/error feedback (add account, refresh, remove, health check) is dispatched on the `@wordpress/notices` store and rendered by the global SnackbarList outside the card subtree, matching WP-core's connector pattern. Inline error display uses a plain banner with `role="alert"` instead of `Notice`. Persistent body `Notice` components carry explicit `politeness` and `spokenMessage` props. This avoids a deps-array race inside `@wordpress/components` `useSpokenMessage` that surfaced as "Cannot read properties of undefined (reading 'length')" during the device-code success-flip on add-account.
-* **NEW**: per-provider REST routes under `/anthropic-max-pool/v1/{provider}/` (`accounts`, `authorize`, `exchange`, `manual`, `accounts/remove`, `accounts/refresh`, `health`) plus a top-level `/providers` index endpoint. Legacy `/anthropic-max-pool/v1/accounts` (and friends) remain Anthropic-only and unchanged for backward compatibility.
+* **NEW**: per-provider REST routes under `/anthropic-max-pool/v1/{provider}/` (`accounts`, `authorize`, `exchange`, `accounts/remove`, `accounts/refresh`, `health`) plus a top-level `/providers` index endpoint. Legacy `/anthropic-max-pool/v1/accounts` (and friends) remain Anthropic-only and unchanged for backward compatibility.
 * **NEW**: `src/OAuthPool/ProviderConfig.php` declares per-provider OAuth parameters (client id, endpoints, scopes, redirect, user-agent, health-check URL); `ProviderPool.php` implements the generic per-provider pool (load/save/list/add/remove/refresh/rotate/health); `PoolRegistry.php` is the memoised pool factory. `PoolManager` is now a thin facade over the registry for the Anthropic pool, preserving every public method and constant used by 1.0/1.1 callers.
-* **NEW**: Connectors page now renders four cards (Anthropic Max, OpenAI ChatGPT/Codex, Cursor Pro, Google AI Pro) with provider-specific badges and forms — `oauth-paste` for the three OAuth providers, `manual-token` for Cursor.
-* Stored option keys for new providers (`anthropic_max_oauth_pool_openai`, `..._cursor`, `..._google`) are namespaced; the existing `anthropic_max_oauth_pool` key for Anthropic is unchanged, so 1.1.0 installs upgrade in place with zero migration.
-* AI Client SDK provider classes for OpenAI/Cursor/Google are out of scope for this release; pool storage and rotation are fully wired, and SDK integration ships in a follow-up.
+* **NEW**: Connectors page now renders three cards (Anthropic Max, OpenAI ChatGPT/Codex, Google AI Pro) with provider-specific badges and OAuth forms.
+* Stored option keys for new providers (`anthropic_max_oauth_pool_openai`, `..._google`) are namespaced; the existing `anthropic_max_oauth_pool` key for Anthropic is unchanged, so 1.1.0 installs upgrade in place with zero migration.
+* AI Client SDK provider classes for Google are out of scope for this release; pool storage and rotation are fully wired, and SDK integration ships in a follow-up.
 
 = 1.1.0 =
 

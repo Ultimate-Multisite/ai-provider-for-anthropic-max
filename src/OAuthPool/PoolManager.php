@@ -4,9 +4,9 @@
  *
  * Since 1.2.0 this class is a thin backwards-compatibility facade over
  * `PoolRegistry::pool('anthropic')` — the actual pool logic lives in
- * `ProviderPool`, and the same logic powers the OpenAI/Cursor/Google
- * pools introduced in 1.2.0. Public methods, constants, and the option
- * key (`anthropic_max_oauth_pool`) are preserved unchanged so existing
+ * `ProviderPool`, and the same logic powers the OpenAI/Google pools
+ * introduced in 1.2.0. Public methods, constants, and the option key
+ * (`anthropic_max_oauth_pool`) are preserved unchanged so existing
  * consumers (auth class, settings UI, REST routes, stored data) keep
  * working without migration.
  *
