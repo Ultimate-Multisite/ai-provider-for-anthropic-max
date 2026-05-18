@@ -1,4 +1,5 @@
 <?php
+
 /**
  * ChatGPT Codex text generation model.
  *
@@ -33,6 +34,7 @@ use WordPress\AiClient\Common\Exception\InvalidArgumentException;
 use WordPress\AiClient\Common\Exception\RuntimeException;
 use WordPress\AiClient\Messages\DTO\Message;
 use WordPress\AiClient\Messages\DTO\MessagePart;
+use WordPress\AiClient\Messages\Enums\MessagePartChannelEnum;
 use WordPress\AiClient\Messages\Enums\MessageRoleEnum;
 use WordPress\AiClient\Providers\ApiBasedImplementation\AbstractApiBasedModel;
 use WordPress\AiClient\Providers\Http\Contracts\RequestAuthenticationInterface;
@@ -41,6 +43,9 @@ use WordPress\AiClient\Results\DTO\Candidate;
 use WordPress\AiClient\Results\DTO\GenerativeAiResult;
 use WordPress\AiClient\Results\DTO\TokenUsage;
 use WordPress\AiClient\Results\Enums\FinishReasonEnum;
+use WordPress\AiClient\Tools\DTO\FunctionCall;
+use WordPress\AiClient\Tools\DTO\FunctionDeclaration;
+use WordPress\AiClient\Tools\DTO\FunctionResponse;
 use AnthropicMaxAiProvider\Authentication\ChatGptCodexOAuthRequestAuthentication;
 use AnthropicMaxAiProvider\OAuthPool\PoolRegistry;
 use AnthropicMaxAiProvider\Provider\ChatGptCodexProvider;
@@ -135,6 +140,15 @@ class ChatGptCodexTextGenerationModel extends AbstractApiBasedModel implements T
             'input'        => $inputItems,
             'stream'       => true,
             'store'        => false,
+            // Required when `store=false` for reasoning items to round-trip.
+            // Without this, Codex emits reasoning items as bare {id, type, summary[]}
+            // references, and any follow-up turn that echoes them back triggers
+            // HTTP 404 "Item with id 'rs_...' not found. Items are not persisted
+            // when `store` is set to false." Asking for the encrypted_content
+            // upfront makes Codex include it on the emitted reasoning item, which
+            // we pack into the thought-channel signature so it can be replayed
+            // verbatim on the next turn.
+            'include'      => ['reasoning.encrypted_content'],
         ];
 
         $temperature = $config->getTemperature();
@@ -146,11 +160,19 @@ class ChatGptCodexTextGenerationModel extends AbstractApiBasedModel implements T
             $body_params['top_p'] = $topP;
         }
 
+        // Probe: forward FunctionDeclarations as a Responses-API `tools` array
+        // so the model can call host-side abilities instead of inventing a
+        // pseudo `<tool_use>` text protocol when tools are present.
+        $functionDeclarations = $config->getFunctionDeclarations();
+        if (is_array($functionDeclarations) && !empty($functionDeclarations)) {
+            $body_params['tools'] = $this->prepareToolsParam($functionDeclarations);
+        }
+
         // Custom options last-write-wins to allow callers to override
         // anything except the wire-mandatory fields.
         $customOptions = $config->getCustomOptions();
         foreach ($customOptions as $key => $value) {
-            if (in_array($key, ['model', 'input', 'stream', 'store'], true)) {
+            if (in_array($key, ['model', 'input', 'stream', 'store', 'include'], true)) {
                 continue;
             }
             // Defensive: Codex rejects `max_output_tokens`; drop silently
@@ -322,8 +344,20 @@ class ChatGptCodexTextGenerationModel extends AbstractApiBasedModel implements T
     /**
      * Converts the SDK prompt into the Codex Responses API `input` array.
      *
-     * USER messages become `input_text` parts; MODEL messages become
-     * `output_text` parts so multi-turn conversations preserve history.
+     * Each Message becomes a sequence of top-level input items:
+     *
+     * - Thought-channel parts → `reasoning` items (encrypted_content/id/summary
+     *   restored from the packed thought signature), emitted FIRST so they
+     *   precede any message wrapper they were captured alongside.
+     * - FunctionCall content parts → top-level `function_call` items.
+     * - FunctionResponse content parts → top-level `function_call_output` items.
+     * - Text content parts → accumulated into one `message` wrapper item per
+     *   role (USER → `input_text`, MODEL → `output_text`).
+     *
+     * The Responses API requires function_call / function_call_output items to
+     * live at the top level (not nested in message content); reasoning items
+     * are top-level too because that is where they were returned in the
+     * `response.completed.response.output[]` payload.
      *
      * @since 1.2.0
      *
@@ -336,38 +370,65 @@ class ChatGptCodexTextGenerationModel extends AbstractApiBasedModel implements T
 
         foreach ($prompt as $message) {
             $is_user = $message->getRole() !== MessageRoleEnum::model();
-            $parts   = [];
 
+            // Emit any reasoning items first so the model sees its prior
+            // thought-trace before its prior message content on next turn.
+            foreach ($this->getReasoningInputItems($message) as $reasoningItem) {
+                $input[] = $reasoningItem;
+            }
+
+            $textParts = [];
             foreach ($message->getParts() as $part) {
+                $channel = method_exists($part, 'getChannel') ? $part->getChannel() : null;
+                if ($channel !== null && $channel->isThought()) {
+                    // Already emitted via getReasoningInputItems().
+                    continue;
+                }
+
+                $type = $part->getType();
+                if ($type->isFunctionCall()) {
+                    $item = $this->convertFunctionCallPartToInputItem($part);
+                    if ($item !== null) {
+                        $input[] = $item;
+                    }
+                    continue;
+                }
+                if ($type->isFunctionResponse()) {
+                    $item = $this->convertFunctionResponsePartToInputItem($part);
+                    if ($item !== null) {
+                        $input[] = $item;
+                    }
+                    continue;
+                }
+
                 $converted = $this->convertPartToInput($part, $is_user);
                 if ($converted !== null) {
-                    $parts[] = $converted;
+                    $textParts[] = $converted;
                 }
             }
 
-            if (empty($parts)) {
-                continue;
+            if (!empty($textParts)) {
+                $input[] = [
+                    'role'    => $is_user ? 'user' : 'assistant',
+                    'content' => $textParts,
+                ];
             }
-
-            $input[] = [
-                'role'    => $is_user ? 'user' : 'assistant',
-                'content' => $parts,
-            ];
         }
 
         return $input;
     }
 
     /**
-     * Converts a single SDK MessagePart to a Responses-API content entry.
+     * Converts a single SDK text MessagePart to a Responses-API content entry.
      *
-     * Only text parts are supported in this first revision; file and
-     * function parts return null (silently skipped) so a prompt with
-     * mixed content still sends its text portions instead of failing.
+     * Non-text parts (file / function_call / function_response) are handled
+     * by their own dedicated converters in {@see self::buildInput()}; this
+     * method only emits `input_text` / `output_text` segments and returns
+     * null for anything else.
      *
      * @since 1.2.0
      *
-     * @param MessagePart $part   The part to convert.
+     * @param MessagePart $part    The part to convert.
      * @param bool        $is_user Whether the enclosing message is from the user.
      * @return array<string, mixed>|null
      */
@@ -387,30 +448,192 @@ class ChatGptCodexTextGenerationModel extends AbstractApiBasedModel implements T
     }
 
     /**
+     * Converts a FunctionCall MessagePart into a top-level `function_call`
+     * input item, suitable for placing in the `input` array sent to Codex.
+     *
+     * Empty / unparseable args serialize to `"{}"` per the Responses API spec.
+     *
+     * @since n.e.x.t
+     *
+     * @param MessagePart $part A part whose type is functionCall().
+     * @return array<string, mixed>|null
+     */
+    protected function convertFunctionCallPartToInputItem(MessagePart $part): ?array
+    {
+        $call = $part->getFunctionCall();
+        if (!($call instanceof FunctionCall)) {
+            return null;
+        }
+        $name   = $call->getName();
+        $callId = $call->getId();
+        if (!is_string($name) || $name === '' || !is_string($callId) || $callId === '') {
+            return null;
+        }
+        $args     = $call->getArgs();
+        $argsJson = '{}';
+        if ($args !== null) {
+            $encoded = wp_json_encode($args);
+            if (is_string($encoded)) {
+                $argsJson = $encoded;
+            }
+        }
+        return [
+            'type'      => 'function_call',
+            'call_id'   => $callId,
+            'name'      => $name,
+            'arguments' => $argsJson,
+        ];
+    }
+
+    /**
+     * Converts a FunctionResponse MessagePart into a top-level
+     * `function_call_output` input item.
+     *
+     * The Responses API expects `output` as a string; non-string responses
+     * are JSON-encoded so tool result data round-trips losslessly.
+     *
+     * @since n.e.x.t
+     *
+     * @param MessagePart $part A part whose type is functionResponse().
+     * @return array<string, mixed>|null
+     */
+    protected function convertFunctionResponsePartToInputItem(MessagePart $part): ?array
+    {
+        $resp = $part->getFunctionResponse();
+        if (!($resp instanceof FunctionResponse)) {
+            return null;
+        }
+        $callId = $resp->getId();
+        if (!is_string($callId) || $callId === '') {
+            return null;
+        }
+        $response = $resp->getResponse();
+        if (is_string($response)) {
+            $output = $response;
+        } else {
+            $encoded = wp_json_encode($response);
+            $output  = is_string($encoded) ? $encoded : '';
+        }
+        return [
+            'type'    => 'function_call_output',
+            'call_id' => $callId,
+            'output'  => $output,
+        ];
+    }
+
+    /**
+     * Extracts top-level `reasoning` items from a message's thought-channel
+     * parts so they can be echoed back as their own input items on the next
+     * turn (the Responses API expects reasoning items at the top level, not
+     * nested in message content).
+     *
+     * Mirrors {@see OpenAiTextGenerationModel::getReasoningInputItems()} from
+     * the WordPress/ai-provider-for-openai plugin's reasoning round-trip
+     * support: the original `{id, encrypted_content, summary}` triple was
+     * packed into the MessagePart's thought signature (a single string), so
+     * we decode that JSON blob here to restore the full input shape.
+     *
+     * @since n.e.x.t
+     *
+     * @param Message $message
+     * @return list<array<string, mixed>>
+     */
+    protected function getReasoningInputItems(Message $message): array
+    {
+        if (!method_exists(MessagePart::class, 'getThoughtSignature')) {
+            return [];
+        }
+
+        $items = [];
+        foreach ($message->getParts() as $part) {
+            $channel = method_exists($part, 'getChannel') ? $part->getChannel() : null;
+            if ($channel === null || !$channel->isThought()) {
+                continue;
+            }
+            /** @phpstan-ignore-next-line method.notFound (gated by method_exists check above) */
+            $signature = $part->getThoughtSignature();
+            if (!is_string($signature) || $signature === '') {
+                continue;
+            }
+
+            $item    = ['type' => 'reasoning'];
+            $decoded = json_decode($signature, true);
+            if (is_array($decoded)) {
+                if (isset($decoded['id']) && is_string($decoded['id'])) {
+                    $item['id'] = $decoded['id'];
+                }
+                if (isset($decoded['encrypted_content']) && is_string($decoded['encrypted_content'])) {
+                    $item['encrypted_content'] = $decoded['encrypted_content'];
+                }
+                if (isset($decoded['summary']) && is_array($decoded['summary'])) {
+                    $item['summary'] = $decoded['summary'];
+                }
+            } else {
+                $item['encrypted_content'] = $signature;
+            }
+            if (!isset($item['summary'])) {
+                $item['summary'] = [];
+            }
+            $items[] = $item;
+        }
+        return $items;
+    }
+
+    /**
+     * Serializes FunctionDeclarations into the Responses-API `tools` array.
+     *
+     * Mirrors {@see OpenAiTextGenerationModel::prepareToolsParam()} from
+     * WordPress/ai-provider-for-openai. The Codex backend (verified via the
+     * probe in commit history) accepts the same shape as the public
+     * Responses API, so no Codex-specific filtering is required.
+     *
+     * @since n.e.x.t
+     *
+     * @param list<FunctionDeclaration> $functionDeclarations
+     * @return list<array<string, mixed>>
+     */
+    protected function prepareToolsParam(array $functionDeclarations): array
+    {
+        $tools = [];
+        foreach ($functionDeclarations as $functionDeclaration) {
+            $tools[] = [
+                'type'        => 'function',
+                'name'        => $functionDeclaration->getName(),
+                'description' => $functionDeclaration->getDescription(),
+                'parameters'  => $functionDeclaration->getParameters(),
+            ];
+        }
+        return $tools;
+    }
+
+    /**
      * Parses the SSE response body into a GenerativeAiResult.
      *
-     * The SSE stream from Codex follows the OpenAI Responses API spec:
-     * a series of `event:`/`data:` pairs, ending with a
-     * `response.completed` event whose `data.response` carries the full
-     * final response object (output items, usage, status). We walk the
-     * stream once, locate that event, and build the result from it. As
-     * a defensive fallback for partial streams we also aggregate
-     * `response.output_text.delta` chunks so we can still surface
-     * something useful when the completed event is absent (e.g. mid-stream
-     * connection drop).
+     * Codex's SSE stream follows the OpenAI Responses API event vocabulary
+     * but differs from the public Responses API in one crucial way: the
+     * final `response.completed` event's `data.response.output` array is
+     * empty. The authoritative output items only arrive as `item` payloads
+     * inside the incremental `response.output_item.done` events, so we
+     * accumulate those during the walk and pass that list into
+     * {@see self::parseOutputToParts()} once the stream finishes.
+     *
+     * As a defensive fallback for partial streams we also aggregate
+     * `response.output_text.delta` chunks, so a mid-stream connection drop
+     * still surfaces whatever text the model managed to emit.
      *
      * @since 1.2.0
      *
      * @param string $body Raw SSE body.
      * @return GenerativeAiResult
      *
-     * @throws RuntimeException If the body contains no usable text.
+     * @throws RuntimeException If the body contains no usable output.
      */
     protected function parseSseToResult(string $body): GenerativeAiResult
     {
-        $delta_text         = '';
-        $completed_response = null;
-        $response_id        = '';
+        $delta_text   = '';
+        $usage        = [];
+        $response_id  = '';
+        $output_items = [];
 
         // Split on event boundaries. SSE allows "\r\n\r\n" or "\n\n";
         // normalise to "\n\n" first.
@@ -448,90 +671,240 @@ class ChatGptCodexTextGenerationModel extends AbstractApiBasedModel implements T
                 continue;
             }
 
-            if ($event_name === 'response.output_text.delta'
+            if (
+                $event_name === 'response.output_text.delta'
                 && isset($data['delta']) && is_string($data['delta'])
             ) {
                 $delta_text .= $data['delta'];
             }
-            if ($event_name === 'response.completed' && isset($data['response'])) {
-                $completed_response = $data['response'];
+
+            // Codex publishes each output item's final form via
+            // `response.output_item.done`. The `response.completed.response.output`
+            // array is empty on this backend, so these per-item events are
+            // the authoritative source for reasoning and function_call items.
+            if (
+                $event_name === 'response.output_item.done'
+                && isset($data['item']) && is_array($data['item'])
+            ) {
+                $output_items[] = $data['item'];
+            }
+
+            // Token usage and trailing response id live on the completed event.
+            if ($event_name === 'response.completed' && isset($data['response']) && is_array($data['response'])) {
+                if (isset($data['response']['usage']) && is_array($data['response']['usage'])) {
+                    $usage = $data['response']['usage'];
+                }
+                if ($response_id === '' && isset($data['response']['id']) && is_string($data['response']['id'])) {
+                    $response_id = $data['response']['id'];
+                }
             }
             if ($response_id === '' && isset($data['response']['id']) && is_string($data['response']['id'])) {
                 $response_id = $data['response']['id'];
             }
         }
 
-        $final_text  = '';
-        $token_usage = new TokenUsage(0, 0, 0);
+        $hasFunctionCall = false;
+        $parts           = $this->parseOutputToParts($output_items, $hasFunctionCall);
 
-        if (is_array($completed_response)) {
-            $final_text  = $this->extractTextFromCompletedResponse($completed_response);
-            $token_usage = $this->parseTokenUsage(
-                is_array($completed_response['usage'] ?? null) ? $completed_response['usage'] : []
-            );
-        }
-        if ($final_text === '' && $delta_text !== '') {
-            $final_text = $delta_text;
+        // Fallback: if no output_item.done events arrived but delta_text did,
+        // surface what we have as a single text part. Preserves the partial-
+        // stream resilience the original implementation had.
+        if (empty($parts) && $delta_text !== '') {
+            $parts[] = new MessagePart($delta_text);
         }
 
-        if ($final_text === '') {
+        if (empty($parts)) {
             throw new RuntimeException(
-                'ChatGPT Codex SSE stream finished without producing any text output.'
+                'ChatGPT Codex SSE stream finished without producing any usable output.'
             );
         }
 
-        $message    = new Message(
-            MessageRoleEnum::model(),
-            [new MessagePart($final_text)]
-        );
-        $candidates = [new Candidate($message, FinishReasonEnum::stop())];
+        $finishReason = $hasFunctionCall
+            ? FinishReasonEnum::toolCalls()
+            : FinishReasonEnum::stop();
+
+        $message    = new Message(MessageRoleEnum::model(), $parts);
+        $candidates = [new Candidate($message, $finishReason)];
 
         return new GenerativeAiResult(
             $response_id !== '' ? $response_id : ('codex-' . bin2hex(random_bytes(6))),
             $candidates,
-            $token_usage,
+            $this->parseTokenUsage($usage),
             $this->providerMetadata(),
             $this->metadata()
         );
     }
 
     /**
-     * Walks the `output[]` array from a `response.completed` payload
-     * and concatenates every `output_text` segment in order.
+     * Converts a list of completed output items (collected from Codex's
+     * `response.output_item.done` events) into a list of {@see MessagePart}s.
+     *
+     * Item handling:
+     *
+     * - `reasoning` → thought-channel MessagePart whose signature is a packed
+     *   JSON blob of `{id, encrypted_content, summary}` so the original triple
+     *   round-trips losslessly on the next outbound turn.
+     * - `function_call` → MessagePart wrapping a {@see FunctionCall} DTO; sets
+     *   the byref `$hasFunctionCall` flag so the caller can pick the right
+     *   {@see FinishReasonEnum}.
+     * - `message` → all `output_text` segments concatenated into one text
+     *   MessagePart.
+     * - Unknown types → skipped (forward compatibility).
+     *
+     * Parts come back in the order Codex emitted them, so reasoning naturally
+     * precedes the message / function_call it preceded in the stream — which
+     * is what the agent loop needs in order to surface preamble text before
+     * tool calls.
      *
      * @since 1.2.0
      *
-     * @param array<string, mixed> $completed
-     * @return string
+     * @param list<array<string, mixed>> $outputItems     Completed output items in stream order.
+     * @param bool                       $hasFunctionCall Out: set true if at least one function_call was parsed.
+     * @return list<MessagePart>
      */
-    protected function extractTextFromCompletedResponse(array $completed): string
+    protected function parseOutputToParts(array $outputItems, bool &$hasFunctionCall): array
     {
-        $text = '';
-        $output = $completed['output'] ?? [];
-        if (!is_array($output)) {
-            return '';
-        }
-        foreach ($output as $item) {
+        $parts = [];
+        foreach ($outputItems as $item) {
             if (!is_array($item)) {
                 continue;
             }
-            if (($item['type'] ?? '') !== 'message') {
+            $type = $item['type'] ?? '';
+
+            if ($type === 'reasoning') {
+                $part = $this->parseReasoningOutputToPart($item);
+                if ($part !== null) {
+                    $parts[] = $part;
+                }
                 continue;
             }
-            $content = $item['content'] ?? [];
-            if (!is_array($content)) {
+
+            if ($type === 'function_call') {
+                $part = $this->parseFunctionCallOutputToPart($item);
+                if ($part !== null) {
+                    $parts[] = $part;
+                    $hasFunctionCall = true;
+                }
                 continue;
             }
-            foreach ($content as $segment) {
-                if (!is_array($segment)) {
-                    continue;
+
+            if ($type === 'message') {
+                $text = '';
+                $content = $item['content'] ?? [];
+                if (is_array($content)) {
+                    foreach ($content as $segment) {
+                        if (!is_array($segment)) {
+                            continue;
+                        }
+                        if (
+                            ($segment['type'] ?? '') === 'output_text'
+                            && isset($segment['text']) && is_string($segment['text'])
+                        ) {
+                            $text .= $segment['text'];
+                        }
+                    }
                 }
-                if (($segment['type'] ?? '') === 'output_text' && isset($segment['text']) && is_string($segment['text'])) {
-                    $text .= $segment['text'];
+                if ($text !== '') {
+                    $parts[] = new MessagePart($text);
                 }
+                continue;
             }
         }
-        return $text;
+
+        return $parts;
+    }
+
+    /**
+     * Parses a `reasoning` output item into a thought-channel MessagePart.
+     *
+     * Mirrors {@see OpenAiTextGenerationModel::parseReasoningOutputToPart()}:
+     * pack `{id, encrypted_content, summary}` into the MessagePart's thought
+     * signature so the next outbound turn can rebuild the full reasoning
+     * input item from a single SDK-recognised string.
+     *
+     * Returns null when the SDK lacks thought-channel support, when the item
+     * carries no useful payload, or when JSON encoding fails.
+     *
+     * @since n.e.x.t
+     *
+     * @param array<string, mixed> $outputItem
+     * @return MessagePart|null
+     */
+    protected function parseReasoningOutputToPart(array $outputItem): ?MessagePart
+    {
+        if (!method_exists(MessagePart::class, 'getThoughtSignature')) {
+            return null;
+        }
+
+        $summary = isset($outputItem['summary']) && is_array($outputItem['summary'])
+            ? $outputItem['summary']
+            : [];
+
+        $signaturePayload = [];
+        if (isset($outputItem['id']) && is_string($outputItem['id'])) {
+            $signaturePayload['id'] = $outputItem['id'];
+        }
+        if (isset($outputItem['encrypted_content']) && is_string($outputItem['encrypted_content'])) {
+            $signaturePayload['encrypted_content'] = $outputItem['encrypted_content'];
+        }
+        if (!empty($summary)) {
+            $signaturePayload['summary'] = $summary;
+        }
+
+        if (empty($signaturePayload)) {
+            return null;
+        }
+
+        $signature = wp_json_encode($signaturePayload);
+        if (!is_string($signature)) {
+            return null;
+        }
+
+        // Surface the visible summary text (if any) as the part's content so
+        // tools that inspect message text see the model's reasoning summary,
+        // not an empty string.
+        $summaryText = '';
+        foreach ($summary as $summaryItem) {
+            if (is_array($summaryItem) && isset($summaryItem['text']) && is_string($summaryItem['text'])) {
+                $summaryText .= $summaryItem['text'];
+            }
+        }
+
+        /** @phpstan-ignore-next-line arguments.count (gated by method_exists check above) */
+        return new MessagePart($summaryText, MessagePartChannelEnum::thought(), $signature);
+    }
+
+    /**
+     * Parses a `function_call` output item into a MessagePart wrapping a
+     * {@see FunctionCall} DTO.
+     *
+     * Codex returns arguments as a JSON string. An empty object `"{}"`
+     * decodes to an empty array, which semantically means "no arguments"
+     * and is normalised to null so the SDK does not echo `{}` on the next
+     * turn (which some providers reject).
+     *
+     * @since n.e.x.t
+     *
+     * @param array<string, mixed> $outputItem
+     * @return MessagePart|null
+     */
+    protected function parseFunctionCallOutputToPart(array $outputItem): ?MessagePart
+    {
+        $callId = $outputItem['call_id'] ?? null;
+        $name   = $outputItem['name'] ?? null;
+        if (!is_string($callId) || !is_string($name) || $callId === '' || $name === '') {
+            return null;
+        }
+
+        $args = null;
+        if (isset($outputItem['arguments']) && is_string($outputItem['arguments'])) {
+            $decoded = json_decode($outputItem['arguments'], true);
+            if (is_array($decoded) && count($decoded) > 0) {
+                $args = $decoded;
+            }
+        }
+
+        return new MessagePart(new FunctionCall($callId, $name, $args));
     }
 
     /**
