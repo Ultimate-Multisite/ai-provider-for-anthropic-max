@@ -341,15 +341,31 @@ class AnthropicMaxTextGenerationModel extends AbstractApiBasedModel implements T
 
         if ($type->isText()) {
             if ($part->getChannel()->isThought()) {
+                $signature = method_exists($part, 'getThoughtSignature')
+                    ? $part->getThoughtSignature()
+                    : null;
+
+                if (is_string($signature) && '' !== $signature && '{' === $signature[0]) {
+                    $decoded = json_decode($signature, true);
+                    if (
+                        is_array($decoded)
+                        && isset($decoded['type'], $decoded['data'])
+                        && 'redacted_thinking' === $decoded['type']
+                        && is_string($decoded['data'])
+                    ) {
+                        return [
+                            'type' => 'redacted_thinking',
+                            'data' => $decoded['data'],
+                        ];
+                    }
+                }
+
                 $data = [
                     'type'     => 'thinking',
                     'thinking' => $part->getText(),
                 ];
-                if (method_exists($part, 'getThoughtSignature')) {
-                    $signature = $part->getThoughtSignature();
-                    if (null !== $signature) {
-                        $data['signature'] = $signature;
-                    }
+                if (null !== $signature) {
+                    $data['signature'] = $signature;
                 }
                 return $data;
             }
@@ -750,6 +766,23 @@ class AnthropicMaxTextGenerationModel extends AbstractApiBasedModel implements T
                 );
 
             case 'redacted_thinking':
+                if (
+                    !isset($partData['data'])
+                    || !is_string($partData['data'])
+                    || !method_exists(MessagePart::class, 'getThoughtSignature')
+                ) {
+                    return null;
+                }
+                $redactedPayload = wp_json_encode([
+                    'type' => 'redacted_thinking',
+                    'data' => $partData['data'],
+                ]);
+                if (!is_string($redactedPayload)) {
+                    return null;
+                }
+                /** @phpstan-ignore-next-line arguments.count (gated by method_exists check above) */
+                return new MessagePart('', MessagePartChannelEnum::thought(), $redactedPayload);
+
             case 'server_tool_use':
             case 'web_search_tool_result':
                 return null;
