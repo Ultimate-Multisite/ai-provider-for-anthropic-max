@@ -341,10 +341,17 @@ class AnthropicMaxTextGenerationModel extends AbstractApiBasedModel implements T
 
         if ($type->isText()) {
             if ($part->getChannel()->isThought()) {
-                return [
+                $data = [
                     'type'     => 'thinking',
                     'thinking' => $part->getText(),
                 ];
+                if (method_exists($part, 'getThoughtSignature')) {
+                    $signature = $part->getThoughtSignature();
+                    if (null !== $signature) {
+                        $data['signature'] = $signature;
+                    }
+                }
+                return $data;
             }
             return [
                 'type' => 'text',
@@ -716,6 +723,13 @@ class AnthropicMaxTextGenerationModel extends AbstractApiBasedModel implements T
             case 'thinking':
                 if (!isset($partData['thinking']) || !is_string($partData['thinking'])) {
                     throw new InvalidArgumentException('Part has an invalid thinking shape.');
+                }
+                $signature = isset($partData['signature']) && is_string($partData['signature'])
+                    ? $partData['signature']
+                    : null;
+                if (null !== $signature && method_exists(MessagePart::class, 'getThoughtSignature')) {
+                    /** @phpstan-ignore-next-line arguments.count (gated by method_exists check above) */
+                    return new MessagePart($partData['thinking'], MessagePartChannelEnum::thought(), $signature);
                 }
                 return new MessagePart($partData['thinking'], MessagePartChannelEnum::thought());
 
