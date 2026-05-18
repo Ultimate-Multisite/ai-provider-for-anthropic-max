@@ -362,7 +362,19 @@ class AnthropicMaxTextGenerationModel extends AbstractApiBasedModel implements T
                 throw new RuntimeException('The function_call typed message part must contain a function call.');
             }
             $input = $functionCall->getArgs();
-            if ($input === null) {
+            /*
+             * Anthropic requires tool_use.input to be a JSON object,
+             * never an array. PHP serializes an empty array `[]` as a
+             * JSON array, not an object, so an empty-args function call
+             * (e.g. a parameterless ability) would emit `"input": []`
+             * and trigger a 400:
+             *   `messages.N.content.M.tool_use.input: Input should be
+             *    an object`.
+             *
+             * Normalise both `null` and any empty array to an empty
+             * `stdClass` so json_encode produces `"input": {}`.
+             */
+            if ($input === null || (is_array($input) && count($input) === 0)) {
                 $input = new \stdClass();
             }
             return [
