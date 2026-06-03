@@ -36,20 +36,26 @@ class ChatGptCodexModelMetadataDirectory extends AbstractApiBasedModelMetadataDi
      * Tested against `https://chatgpt.com/backend-api/codex/responses`
      * with a real ChatGPT Plus/Pro/Team OAuth token. The full set of
      * model ids the upstream opencode CLI references is
-     * `gpt-5.5, gpt-5.2, gpt-5.3-codex, gpt-5.3-codex-spark, gpt-5.4,
-     * gpt-5.4-mini`, but the OAuth path rejects the `gpt-5.3-*` and
-     * `gpt-5-codex` ids as "not supported when using Codex with a
-     * ChatGPT account". Only the four below are exposed here; if
-     * future Codex deployments unlock more ids, add them via the
-     * `anthropic_max_chatgpt_codex_models` filter.
+     * `gpt-5.5, gpt-5.5-fast, gpt-5.5-pro, gpt-5.4, gpt-5.4-fast,
+     * gpt-5.4-mini, gpt-5.4-mini-fast, gpt-5.3-codex,
+     * gpt-5.3-codex-spark, gpt-5.2`, but the OAuth path rejects the
+     * `*-fast`, `*-pro`, `gpt-5.3-codex`, and `gpt-5.2` ids as "not
+     * supported when using Codex with a ChatGPT account". Only the working
+     * ids below are exposed; if future Codex deployments unlock more ids, add
+     * them via the `anthropic_max_chatgpt_codex_models` filter. GPT-5.5 is
+     * listed first so SDK consumers that default to the first advertised model
+     * prefer it when the site has not saved an explicit model choice.
      *
      * @var array<int, array{id: string, name: string}>
      */
     private const MODELS = [
-        ['id' => 'gpt-5.4-mini', 'name' => 'GPT-5.4 mini (Codex)'],
-        ['id' => 'gpt-5.4',      'name' => 'GPT-5.4 (Codex)'],
         ['id' => 'gpt-5.5',      'name' => 'GPT-5.5 (Codex)'],
-        ['id' => 'gpt-5.2',      'name' => 'GPT-5.2 (Codex)'],
+        ['id' => 'gpt-5.4',      'name' => 'GPT-5.4 (Codex)'],
+        ['id' => 'gpt-5.4-mini', 'name' => 'GPT-5.4 mini (Codex)'],
+        [
+            'id'   => 'gpt-5.3-codex-spark',
+            'name' => 'GPT-5.3 Codex Spark (Codex)',
+        ],
     ];
 
     /**
