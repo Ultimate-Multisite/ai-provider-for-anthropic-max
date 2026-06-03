@@ -3,7 +3,7 @@ Contributors: superdav42
 Tags: ai, anthropic, claude, openai, oauth
 Requires at least: 6.9
 Tested up to: 7.0
-Stable tag: 1.2.0
+Stable tag: 1.3.0
 Requires PHP: 7.4
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -68,6 +68,18 @@ Multiple accounts provide failover. If one account hits a rate limit, the plugin
 OAuth tokens are stored in the WordPress options table. Only site administrators with `manage_options` capability can manage the account pool.
 
 == Changelog ==
+
+= 1.3.0 =
+Version 1.3.0 - Released on 2026-06-03
+- New: Expanded the provider pool experience so OpenAI ChatGPT/Codex and Google AI Pro join the existing Anthropic Max OAuth pool workflow.
+- New: Added full tool-support behavior for ChatGPT Codex in connector-supported operations.
+- New: Removed the Cursor Pro provider and its setup pathways so only supported OAuth providers remain.
+- Fix: Improved DELETE/refresh connector endpoints to validate emails and payloads more safely, including better save/remove failure handling.
+- Fix: Added a manual OAuth fallback path for sandboxed setups so users can continue connecting accounts.
+- Fix: Repaired Google AI Pro OAuth behavior and wired the provider integration for reliable SDK use.
+- Fix: Fixed Anthropic tool-use payload handling for empty array and round-trip thinking signatures.
+- Improved: Added tag-triggered release and deployment workflow, plus build/packaging tracking updates for release publishing.
+- Improved: Synced release tooling metadata and updated static-analysis and planning config files used during CI and release prep.
 
 = Unreleased =
 
