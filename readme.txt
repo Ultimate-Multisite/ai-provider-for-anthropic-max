@@ -3,7 +3,7 @@ Contributors: superdav42
 Tags: ai, anthropic, claude, openai, oauth
 Requires at least: 6.9
 Tested up to: 7.1
-Stable tag: 1.3.0
+Stable tag: 1.3.1
 Requires PHP: 7.4
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -68,6 +68,10 @@ Multiple accounts provide failover. If one account hits a rate limit, the plugin
 OAuth tokens are stored in the WordPress options table. Only site administrators with `manage_options` capability can manage the account pool.
 
 == Changelog ==
+
+= 1.3.1 =
+Version 1.3.1 - Released on 2026-08-19
+- Improved: WordPress compatibility metadata now reflects testing through WordPress 7.1.
 
 = 1.3.0 =
 Version 1.3.0 - Released on 2026-06-03
